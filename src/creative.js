@@ -23,7 +23,7 @@ export const CREATIVE_CATS = [
 // Explicit overrides win over the heuristics below.
 const OVERRIDE = {
   bench: 'redstone', smelter: 'redstone', crate: 'redstone', ladder: 'redstone',
-  door_low: 'redstone', torch: 'redstone', torch_item: 'redstone', lantern: 'redstone',
+  door_low: 'redstone', bed: 'deco', torch: 'redstone', torch_item: 'redstone', lantern: 'redstone',
   lumen: 'redstone',
   water: 'nature', lava: 'nature', bedrock: 'building',
   shears: 'tools', stick: 'material', bone_meal: 'material', brick: 'material',

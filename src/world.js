@@ -1,4 +1,4 @@
-// VOXHAVEN - main-thread world manager: chunk streaming, edits, queries, save.
+// EVERCRAFT - main-thread world manager: chunk streaming, edits, queries, save.
 
 import * as THREE from '../vendor/three.module.js';
 import { B, CHUNK_X, CHUNK_Z, WORLD_H, SEA_LEVEL, BLOCKS, block, isSolid } from './blocks.js';
@@ -63,6 +63,7 @@ export class World {
     this._fluidQueue = [];
     this._fluidSet = new Set();
     this._fluidT = 0;
+    this._fluidTick = 0;
   }
 
   initWorker(texIndex, savedEdits) {
@@ -278,8 +279,9 @@ export class World {
     if (c.blocks[i] === id) return false;
     c.blocks[i] = id;
     c.dirty = true;
-    // invalidate the cached block-entity (chest) list for this chunk
+    // Invalidate cached animated block-entity lists for this chunk.
     if (id === B.CRATE || c._chestList) c._chestList = null;
+    if (id === B.LANTERN || c._lanternList) c._lanternList = null;
 
     if (record) {
       let e = this.edits.get(k);
@@ -346,8 +348,27 @@ export class World {
         const below = this.getBlock(x, y - 1, z);
         if (below === 0 || below === B.WATER) this.setBlock(x, y, z, 0);
       }
-      if (id === B.DOOR_TOP && this.getBlock(x, y - 1, z) !== B.DOOR_LOW) this.setBlock(x, y, z, 0);
-      if (id === B.DOOR_LOW && this.getBlock(x, y + 1, z) !== B.DOOR_TOP) this.setBlock(x, y, z, 0);
+      // Wall fixtures fall away cleanly when their supporting face is mined.
+      if (bl.wallDir !== undefined) {
+        const supports = [[0, -1], [1, 0], [0, 1], [-1, 0]];
+        const [sx, sz] = supports[bl.wallDir & 3];
+        if (!isSolid(this.getBlock(x + sx, y, z + sz))) this.setBlock(x, y, z, 0);
+      }
+      if (bl.door) {
+        const other = BLOCKS[this.getBlock(x, y + (bl.doorTop ? -1 : 1), z)];
+        const unsupported = !bl.doorTop && !isSolid(this.getBlock(x, y - 1, z));
+        if (unsupported || !other || !other.door || other.doorDir !== bl.doorDir ||
+          other.open !== bl.open || other.doorTop === bl.doorTop) this.setBlock(x, y, z, 0);
+      }
+      if (bl.bed) {
+        const dirs = [[0, -1], [1, 0], [0, 1], [-1, 0]];
+        const [dx, dz] = dirs[bl.bedDir & 3];
+        const ox = x + (bl.bedHead ? -dx : dx), oz = z + (bl.bedHead ? -dz : dz);
+        const other = BLOCKS[this.getBlock(ox, y, oz)];
+        if (!isSolid(this.getBlock(x, y - 1, z)) || !other || !other.bed ||
+          other.bedDir !== bl.bedDir || other.bedHead === bl.bedHead)
+          this.setBlock(x, y, z, 0);
+      }
     }
     q.splice(0, limit);
   }
@@ -411,12 +432,14 @@ export class World {
 
   tickFluids(dt) {
     this._fluidT = (this._fluidT || 0) + dt;
-    const STEP = 0.13;                 // ~7-8 flow updates a second
+    const STEP = 0.16;                 // visible delay after a block opens
     if (this._fluidT < STEP) return;
     // Subtract the step rather than zeroing: zeroing threw away the remainder
     // every tick, so the effective rate drifted below the intended one and
     // spills crawled. Clamp the catch-up so a long stall can't burst.
     this._fluidT = Math.min(this._fluidT - STEP, STEP * 2);
+    this._fluidTick++;
+    const allowLava = this._fluidTick % 3 === 0; // lava advances about 3x slower
 
     const q = this._fluidQueue;
     if (!q.length) return;
@@ -427,11 +450,11 @@ export class World {
       this._fluidSet.delete(batch[i] + ',' + batch[i + 1] + ',' + batch[i + 2]);
     }
     for (let i = 0; i < batch.length; i += 3) {
-      this._stepFluid(batch[i], batch[i + 1], batch[i + 2]);
+      this._stepFluid(batch[i], batch[i + 1], batch[i + 2], allowLava);
     }
   }
 
-  _stepFluid(x, y, z) {
+  _stepFluid(x, y, z, allowLava = true) {
     if (y < 1 || y >= WORLD_H) return;
     const id = this.getBlock(x, y, z);
     const self = this._fluid(id);
@@ -441,11 +464,14 @@ export class World {
       if (!this._canFlowInto(id)) return;
       const fed = this._incomingLevel(x, y, z);
       if (fed.level > 0) {
+        if (fed.kind === 'lava' && !allowLava) { this.queueFluid(x, y, z); return; }
         this.setBlock(x, y, z, this._fluidId(fed.kind, fed.level));
         this._spread(x, y, z);
       }
       return;
     }
+
+    if (self.kind === 'lava' && !allowLava) { this.queueFluid(x, y, z); return; }
 
     // --- water + lava interaction
     if (this._mixed(x, y, z, self)) return;
@@ -486,13 +512,54 @@ export class World {
       ? (self.kind === 'water' ? 7 : 3)
       : self.level - 1;
     if (out > 0) {
-      this.queueFluid(x + 1, y, z);
-      this.queueFluid(x - 1, y, z);
-      this.queueFluid(x, y, z + 1);
-      this.queueFluid(x, y, z - 1);
+      // Prefer directions that reach a drop soonest instead of spreading in a
+      // perfect diamond across a ledge. This is the characteristic downhill
+      // path selection used by Minecraft-style fluids.
+      for (const [dx, dz] of this._flowDirections(x, y, z, self.kind))
+        this.queueFluid(x + dx, y, z + dz);
     }
     // always let the cell above re-evaluate (it may need to drain)
     this.queueFluid(x, y + 1, z);
+  }
+
+  /** Horizontal directions that lead to the nearest available downward step. */
+  _flowDirections(x, y, z, kind) {
+    const dirs = [[1, 0], [-1, 0], [0, 1], [0, -1]];
+    const scored = [];
+    const maxSearch = kind === 'water' ? 4 : 2;
+    for (const [dx, dz] of dirs) {
+      const nx = x + dx, nz = z + dz;
+      const id = this.getBlock(nx, y, nz);
+      const li = this._fluid(id);
+      if (!this._canFlowInto(id) && !(li && li.kind === kind && !li.source)) continue;
+      const below = this.getBlock(nx, y - 1, nz);
+      if (this._canFlowInto(below)) { scored.push({ dx, dz, cost: 0 }); continue; }
+      scored.push({ dx, dz, cost: this._dropDistance(nx, y, nz, kind, maxSearch, x, z) });
+    }
+    if (!scored.length) return [];
+    const best = Math.min(...scored.map(s => s.cost));
+    // If no reachable drop exists every open side is equally valid.
+    return scored.filter(s => best > maxSearch || s.cost === best).map(s => [s.dx, s.dz]);
+  }
+
+  _dropDistance(sx, y, sz, kind, max, blockX, blockZ) {
+    const queue = [[sx, sz, 0]];
+    const seen = new Set([`${sx},${sz}`, `${blockX},${blockZ}`]);
+    for (let qi = 0; qi < queue.length; qi++) {
+      const [x, z, dist] = queue[qi];
+      if (dist >= max) continue;
+      for (const [dx, dz] of [[1, 0], [-1, 0], [0, 1], [0, -1]]) {
+        const nx = x + dx, nz = z + dz, key = `${nx},${nz}`;
+        if (seen.has(key)) continue;
+        seen.add(key);
+        const id = this.getBlock(nx, y, nz);
+        const li = this._fluid(id);
+        if (!this._canFlowInto(id) && !(li && li.kind === kind && !li.source)) continue;
+        if (this._canFlowInto(this.getBlock(nx, y - 1, nz))) return dist + 1;
+        queue.push([nx, nz, dist + 1]);
+      }
+    }
+    return max + 1;
   }
 
   /**

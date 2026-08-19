@@ -1,9 +1,12 @@
-// VOXHAVEN - HUD & interface screens (DOM based, original styling).
+// EVERCRAFT - HUD & interface screens (DOM based, original styling).
 
-import { B, BLOCKS, ITEM, itemDef, itemName, TIER_NAME, ARMOR_SLOTS } from './blocks.js';
+import {
+  B, BLOCKS, ITEM, itemDef, itemName, TIER_NAME, ARMOR_SLOTS,
+  R_CROSS, R_TORCH, R_LADDER, R_DOOR, R_BED,
+} from './blocks.js';
 import { RECIPES, SMELT, FUEL, TAGS, isTag, tagMatches, CATS, matchGrid, ingredientMatches } from './recipes.js';
 import { CREATIVE_CATS, CREATIVE_PALETTE } from './creative.js';
-import { iconDataURL, blockIconDataURL } from './textures.js';
+import { iconDataURL, blockIconDataURL, modelIconDataURL } from './textures.js';
 import { mkStack, stackMax, HOTBAR, INV_SIZE } from './player.js';
 
 const $ = (s, r = document) => r.querySelector(s);
@@ -17,9 +20,25 @@ export function itemIcon(id) {
   if (d) {
     if (d.block) {
       const bl = BLOCKS[d.block];
-      if (bl && bl.tex) url = blockIconDataURL(id, bl.tex, 3);
+      if (bl && bl.tex) {
+        if (bl.render === R_CROSS)
+          url = modelIconDataURL(id, 'cross', bl.tex, 3);
+        else if (bl.render === R_TORCH)
+          url = modelIconDataURL(id, 'torch', bl.tex, 3);
+        else if (bl.render === R_LADDER)
+          url = modelIconDataURL(id, 'ladder', bl.tex, 3);
+        else if (bl.render === R_DOOR)
+          url = modelIconDataURL(id, 'door', bl.tex, 3);
+        else if (bl.render === R_BED)
+          url = modelIconDataURL(id, 'bed', bl.tex, 3);
+        else if (d.block === B.LANTERN)
+          url = modelIconDataURL(id, 'lantern', bl.tex, 3);
+        else url = blockIconDataURL(id, bl.tex, 3);
+      }
     } else if (d.icon) {
       url = iconDataURL(d.icon, 3);
+    } else if (d.place === B.TORCH) {
+      url = modelIconDataURL(id, 'torch', 'torch', 3);
     }
   }
   iconCache.set(id, url);
@@ -53,6 +72,7 @@ export class UI {
     this.craftResult = null;
     this.showBook = false;   // recipe book lives behind the book icon
     this.creativeCat = 'building';   // active tab of the creative palette
+    this.inventoryTab = 'inventory';
     this.creativeFilter = '';
     this.openContainer = null;
     this.openContainerPos = null;
@@ -90,6 +110,7 @@ export class UI {
       <div id="hint"></div>
       <div id="damageFlash"></div>
       <div id="waterOverlay"></div>
+      <div id="sleepFade"></div>
       <div id="vignette"></div>
       <div id="screens"></div>
       <div id="deathScreen" class="hidden">
@@ -226,6 +247,14 @@ export class UI {
     const h = $('#hint');
     h.innerHTML = text || '';
     h.style.opacity = text ? '1' : '0';
+  }
+
+  sleepFlash() {
+    const el = $('#sleepFade');
+    el.classList.remove('play');
+    void el.offsetWidth;
+    el.classList.add('play');
+    setTimeout(() => el.classList.remove('play'), 1250);
   }
 
   showDeath(cause) {
@@ -425,36 +454,44 @@ export class UI {
 
   _invScreen() {
     const p = this.game.player;
+    const creative = this.isCreative();
+    if (!creative) this.inventoryTab = 'inventory';
     this.refreshCraftResult();
-    return `<div class="panel ${this.showBook ? 'wide' : ''}" id="invPanel">
-      <div class="phead"><h2>Satchel</h2><button class="x" data-act="close">✕</button></div>
-      <div class="pbody inv-layout${this.showBook ? ' withbook' : ''}">
-        ${this._armorPanel()}
-        <div class="invmain">
-          <!-- top row: paper doll + the personal 2x2 crafting grid -->
-          <div class="invtop">
-            ${this._playerPreview()}
-            <div class="invcraft">
-              <div class="secline">Crafting ${this._bookBtn()}</div>
-              ${this._craftArea(2)}
-              <div class="charstats mini">
-                <div><span>Level</span><b>${p.level}</b></div>
-                <div><span>Mined</span><b>${p.stats.mined}</b></div>
-                <div><span>Placed</span><b>${p.stats.placed}</b></div>
-              </div>
+    const inventoryOpen = this.inventoryTab === 'inventory';
+    const tabs = `<div class="inventory-tabs">
+      <button class="itab ${inventoryOpen ? 'on' : ''}" data-itab="inventory">Inventory</button>
+      ${creative ? CREATIVE_CATS.map(c => `<button class="itab ${this.inventoryTab === c.id ? 'on' : ''}"
+        data-itab="${c.id}">${c.n}</button>`).join('') : ''}
+    </div>`;
+    const inventory = `<div class="inv-layout${this.showBook ? ' withbook' : ''}">
+      ${this._armorPanel()}
+      <div class="invmain">
+        <div class="invtop">
+          ${this._playerPreview()}
+          <div class="invcraft">
+            <div class="secline">Crafting ${this._bookBtn()}</div>
+            ${this._craftArea(2)}
+            <div class="charstats mini">
+              <div><span>Level</span><b>${p.level}</b></div>
+              <div><span>Mined</span><b>${p.stats.mined}</b></div>
+              <div><span>Placed</span><b>${p.stats.placed}</b></div>
             </div>
           </div>
-          ${this.isCreative()
-            ? `<div class="secline">Creative Palette</div>${this._creativePanel()}`
-            : ''}
-          <div class="secline">Backpack</div>
-          ${this._invGrid(HOTBAR, INV_SIZE)}
-          <div class="secline">Quick Bar</div>
-          ${this._invGrid(0, HOTBAR, 'hot')}
         </div>
-        ${this._recipeBook()}
+        <div class="secline">Backpack</div>
+        ${this._invGrid(HOTBAR, INV_SIZE)}
       </div>
-      <div class="pfoot">Left click move stack · Right click split · Shift+click quick-move · <b>E</b> close</div>
+      ${this._recipeBook()}
+    </div>`;
+    const tabContent = inventoryOpen ? inventory : this._creativePanel();
+    return `<div class="panel wide tabbed-panel" id="invPanel">
+      <div class="phead"><h2>Inventory &amp; Items</h2><button class="x" data-act="close">✕</button></div>
+      <div class="pbody inventory-shell">
+        ${tabs}
+        <div class="inventory-tab-content">${tabContent}</div>
+        <div class="pinned-hotbar"><div class="secline">Quick Bar</div>${this._invGrid(0, HOTBAR, 'hot')}</div>
+      </div>
+      <div class="pfoot">Left click takes or moves · Right click splits · Shift+click quick-moves · <b>E</b> close</div>
     </div>`;
   }
 
@@ -509,6 +546,7 @@ export class UI {
       if (keep.has(i)) continue;
       const st = this.craftGrid[i];
       if (!st) continue;
+      if (st.preview) { this.craftGrid[i] = null; continue; }
       const added = this.game.player.inv.add(st.id, st.count);
       if (added < st.count) {
         const p = this.game.player;
@@ -524,6 +562,7 @@ export class UI {
     for (let i = 0; i < 9; i++) {
       const s = this.craftGrid[i];
       if (!s) continue;
+      if (s.preview) { this.craftGrid[i] = null; continue; }
       const added = this.game.player.inv.add(s.id, s.count);
       if (added < s.count) {
         // no room: drop the remainder at the player's feet
@@ -546,7 +585,9 @@ export class UI {
     // put current grid contents back first
     this.clearCraftGrid();
     const inv = this.game.player.inv;
+    const preview = this.isCreative();
     const take = (ing) => {
+      if (preview) return isTag(ing) ? TAGS[ing][0] : ing;
       for (let i = 0; i < inv.slots.length; i++) {
         const s = inv.slots[i];
         if (!s || s.dur !== undefined) continue;
@@ -580,6 +621,7 @@ export class UI {
           if (!got) { ok = false; break; }
           const gi = r * 3 + c;
           this.craftGrid[gi] = mkStack(got, 1);
+          if (preview) this.craftGrid[gi].preview = true;
           placed.push(gi);
         }
       }
@@ -593,6 +635,7 @@ export class UI {
           if (!got) { ok = false; break outer; }
           const gi = ((slot / n) | 0) * 3 + (slot % n);
           this.craftGrid[gi] = mkStack(got, 1);
+          if (preview) this.craftGrid[gi].preview = true;
           placed.push(gi);
           slot++;
         }
@@ -602,7 +645,7 @@ export class UI {
       // roll back cleanly
       for (const gi of placed) {
         const s = this.craftGrid[gi];
-        if (s) inv.add(s.id, s.count);
+        if (s && !s.preview) inv.add(s.id, s.count);
         this.craftGrid[gi] = null;
       }
       this.refreshCraftResult();
@@ -622,9 +665,7 @@ export class UI {
    */
   _creativePanel() {
     const f = this.creativeFilter.toLowerCase();
-    const tabs = CREATIVE_CATS.map(c =>
-      `<button class="ctab ${c.id === this.creativeCat ? 'on' : ''}" data-ccat="${c.id}"
-        title="${c.n}">${c.n}</button>`).join('');
+    if (CREATIVE_PALETTE[this.inventoryTab]) this.creativeCat = this.inventoryTab;
     let ids = CREATIVE_PALETTE[this.creativeCat] || [];
     if (f) {
       // searching looks across every category, like the real thing
@@ -640,7 +681,6 @@ export class UI {
         title="${itemName(id)}">${slotInner({ id, count: 1 })}</div>`).join('')
       || `<div class="empty">No items match \u201c${this.creativeFilter}\u201d.</div>`;
     return `<div class="creativebox">
-      <div class="ctabs">${tabs}</div>
       <div class="chead">
         <b>${f ? 'Search results' : (CREATIVE_CATS.find(c => c.id === this.creativeCat) || {}).n}</b>
         <span class="ccount">${ids.length} items</span>
@@ -673,19 +713,24 @@ export class UI {
   _recipeBook() {
     if (!this.showBook) return '';
     const bench = this.benchMode();
+    const creative = this.isCreative();
     const list = RECIPES
       .filter(r => r.cat === this.craftCat)
+      // Survival recipe discovery: one known ingredient reveals a recipe. This
+      // keeps the book useful without exposing the entire tech tree on day one.
+      .filter(r => creative || r.need.some(([id]) => this.game.countFor(id) > 0))
       .filter(r => !this.craftFilter || itemName(r.out).toLowerCase().includes(this.craftFilter.toLowerCase()));
     const cats = CATS.map(c =>
       `<button class="cat ${c === this.craftCat ? 'on' : ''}" data-cat="${c}">${capitalize(c)}</button>`).join('');
     const rows = list.map(r => {
       const locked = r.bench && !bench;
-      const canFill = !locked && r.need.every(([id, cnt]) => this.game.countFor(id) >= cnt);
+      const canFill = !locked && (creative || r.need.every(([id, cnt]) => this.game.countFor(id) >= cnt));
       const mini = r.shaped ? recipeMiniGrid(r) : shapelessMini(r);
       const needs = r.need.map(([id, cnt]) => {
         const have = this.game.countFor(id);
         const label = isTag(id) ? tagLabel(id) : itemName(id);
-        return `<span class="ing ${have >= cnt ? 'ok' : 'no'}">${label} <b>${have}/${cnt}</b></span>`;
+        const enough = creative || have >= cnt;
+        return `<span class="ing ${enough ? 'ok' : 'no'}">${label} <b>${creative ? '∞' : have}/${cnt}</b></span>`;
       }).join('');
       return `<div class="recipe ${canFill ? '' : 'dim'}" data-fill="${r.id}" title="Click to auto-fill the grid">
         <div class="rmini">${mini}</div>
@@ -713,23 +758,26 @@ export class UI {
 
   _craftScreen() {
     this.refreshCraftResult();
-    return `<div class="panel ${this.showBook ? 'wide' : ''}" id="craftPanel">
-      <div class="phead"><h2>Crafting</h2>
+    return `<div class="panel wide tabbed-panel" id="craftPanel">
+      <div class="phead"><h2>Crafting Table</h2>
         <button class="x" data-act="close">\u2715</button></div>
-      <div class="pbody craft-layout2">
-        <div class="craftleft">
-          <div class="secline">Crafting Table</div>
-          <div class="craftrow">
-            ${this._bookBtn()}
-            ${this._craftArea(3)}
+      <div class="pbody inventory-shell">
+        <div class="inventory-tabs"><button class="itab on">Crafting</button></div>
+        <div class="inventory-tab-content craft-layout2">
+          <div class="craftleft">
+            <div class="secline">3 \u00d7 3 Grid</div>
+            <div class="craftrow">
+              ${this._bookBtn()}
+              ${this._craftArea(3)}
+            </div>
+            <div class="secline">Backpack</div>
+            ${this._invGrid(HOTBAR, INV_SIZE)}
           </div>
-          <div class="secline">Satchel</div>
-          ${this._invGrid(HOTBAR, INV_SIZE, 'small')}
-          ${this._invGrid(0, HOTBAR, 'small hot')}
+          ${this._recipeBook()}
         </div>
-        ${this._recipeBook()}
+        <div class="pinned-hotbar"><div class="secline">Quick Bar</div>${this._invGrid(0, HOTBAR, 'hot')}</div>
       </div>
-      <div class="pfoot">Drag items into the grid \u00b7 <b>Shift+click</b> the result to craft all \u00b7 <b>C</b> close</div>
+      <div class="pfoot">Left click moves items \u00b7 <b>Shift+click</b> the result crafts all \u00b7 <b>C</b> close</div>
     </div>`;
   }
 
@@ -887,42 +935,19 @@ export class UI {
         else if (a === 'book') { this.showBook = !this.showBook; this.render(); }
       };
     });
-    // ---- creative palette: category tabs
+    // ---- inventory / creative category tabs
+    $$('[data-itab]', this.screensEl).forEach(b => {
+      b.onclick = () => {
+        this.inventoryTab = b.dataset.itab;
+        if (CREATIVE_PALETTE[this.inventoryTab]) this.creativeCat = this.inventoryTab;
+        this.showBook = false;
+        g.audio.click();
+        this.render();
+      };
+    });
+    // legacy creative category controls (kept for compact/mobile layouts)
     $$('[data-ccat]', this.screensEl).forEach(b => {
       b.onclick = () => { this.creativeCat = b.dataset.ccat; g.audio.click(); this.render(); };
-    });
-    // ---- creative palette: take an item
-    $$('[data-src="creative"]', this.screensEl).forEach(b => {
-      b.onclick = (ev) => {
-        const id = b.dataset.item;
-        const max = stackMax(id);
-        g.audio.click();
-        if (ev.shiftKey) {
-          // straight to the quick bar, replacing whatever is selected
-          const p = g.player;
-          p.inv.slots[p.hotbarIdx] = { id, count: max };
-          if (itemDef(id) && itemDef(id).dur) p.inv.slots[p.hotbarIdx].dur = itemDef(id).dur;
-        } else if (this.cursorStack && this.cursorStack.id === id) {
-          this.cursorStack.count = max;         // top the cursor stack back up
-        } else {
-          if (this.cursorStack) g.player.inv.add(this.cursorStack.id, this.cursorStack.count);
-          this.cursorStack = { id, count: max };
-          if (itemDef(id) && itemDef(id).dur) this.cursorStack.dur = itemDef(id).dur;
-        }
-        this.render();
-      };
-      // right-click grabs a single item instead of a stack
-      b.oncontextmenu = (ev) => {
-        ev.preventDefault();
-        const id = b.dataset.item;
-        g.audio.click();
-        if (this.cursorStack && this.cursorStack.id === id) this.cursorStack.count++;
-        else {
-          if (this.cursorStack) g.player.inv.add(this.cursorStack.id, this.cursorStack.count);
-          this.cursorStack = { id, count: 1 };
-        }
-        this.render();
-      };
     });
     const csearch = $('#creativeSearch', this.screensEl);
     if (csearch) {
@@ -936,7 +961,10 @@ export class UI {
       b.onclick = () => {
         const r = RECIPES.find(x => x.id === b.dataset.fill);
         if (!r) return;
-        if (this.fillFromRecipe(r)) { g.audio.click(); }
+        if (r.bench && !this.benchMode()) {
+          g.audio.error();
+          this.toast('This recipe needs a Crafting Table.', 'bad');
+        } else if (this.fillFromRecipe(r)) { g.audio.click(); }
         else { g.audio.error(); this.toast('Not enough materials.', 'bad'); }
         this.render();
       };
@@ -981,7 +1009,7 @@ export class UI {
     e.preventDefault();
     e.stopPropagation();
     const src = slot.dataset.src;
-    const idx = slot.dataset.i;
+    const idx = slot.dataset.i ?? slot.dataset.item;
     const right = e.button === 2;
     const shift = e.shiftKey;
     this.game.audio.click();
@@ -1011,6 +1039,26 @@ export class UI {
 
   _slotClick(src, idx, right, shift) {
     const p = this.game.player;
+
+    // Creative catalogue: primary/left click takes a full stack; secondary
+    // click takes one. Handling this in the shared mouse-down path avoids the
+    // old right-click-only feel and works consistently with touch emulation.
+    if (src === 'creative') {
+      const id = idx;
+      const count = right ? 1 : stackMax(id);
+      const stack = mkStack(id, count);
+      const d = itemDef(id);
+      if (d && d.dur) stack.dur = d.dur;
+      if (shift) p.inv.slots[p.hotbarIdx] = stack;
+      else if (this.cursorStack && this.cursorStack.id === id && !this.cursorStack.dur)
+        this.cursorStack.count = Math.min(stackMax(id), this.cursorStack.count + count);
+      else {
+        if (this.cursorStack) p.inv.add(this.cursorStack.id, this.cursorStack.count);
+        this.cursorStack = stack;
+      }
+      return;
+    }
+
     let cur = this._getSlot(src, idx);
 
     // ---- crafting result: take the crafted item, consuming the grid

@@ -2,7 +2,7 @@ import puppeteer from 'puppeteer';
 const b = await puppeteer.launch({headless:'new',protocolTimeout:240000,args:['--no-sandbox','--disable-setuid-sandbox','--use-gl=swiftshader','--enable-unsafe-swiftshader','--enable-webgl','--disable-dev-shm-usage']});
 const p = await b.newPage();
 await p.goto('http://127.0.0.1:8080/',{waitUntil:'networkidle2'});
-await p.evaluate(()=>window.__VOXHAVEN.begin({slot:3,name:'A',seed:'audit',mode:'creative',load:false}));
+await p.evaluate(()=>window.__EVERCRAFT.begin({slot:3,name:'A',seed:'audit',mode:'creative',load:false}));
 await p.waitForFunction(()=>document.querySelector('#loading').classList.contains('hidden'),{timeout:90000});
 const out = await p.evaluate(async ()=>{
   const THREE = await import('/vendor/three.module.js');

@@ -1,4 +1,4 @@
-// VOXHAVEN - creatures. Original designs, built from box primitives.
+// EVERCRAFT - creatures. Original designs, built from box primitives.
 
 import * as THREE from '../vendor/three.module.js';
 import { B, BLOCKS, isSolid, WORLD_H, SEA_LEVEL } from './blocks.js';

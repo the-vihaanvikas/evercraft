@@ -1,4 +1,4 @@
-# VOXHAVEN — Voxel Survival Sandbox
+# EVERCRAFT — Voxel Survival Sandbox
 
 An open-ended 3D voxel adventure and survival sandbox that runs in the browser.
 Explore a large procedurally generated world, mine resources, craft progressively
@@ -16,7 +16,7 @@ The game is plain ES modules — it only needs a static file server (module
 workers and `import.meta.url` don't work from `file://`).
 
 ```bash
-cd voxhaven
+cd evercraft
 python3 -m http.server 8080
 # open http://localhost:8080
 ```

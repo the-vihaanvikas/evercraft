@@ -1,4 +1,4 @@
-// VOXHAVEN - bootstrap: title screen, loading, game start.
+// EVERCRAFT - bootstrap: title screen, loading, game start.
 
 import { Game } from './game.js';
 import { CHUNK_X } from './blocks.js';
@@ -219,7 +219,7 @@ async function begin(opts) {
       game = new Game(canvas);
     } catch (err) {
       loading.innerHTML = `<div class="loadlogo">Unsupported</div>
-        <div class="loadtip">VOXHAVEN needs WebGL2.<br><small>${escapeHtml(err.message)}</small></div>`;
+        <div class="loadtip">EVERCRAFT needs WebGL2.<br><small>${escapeHtml(err.message)}</small></div>`;
       return;
     }
   }
@@ -263,7 +263,7 @@ async function begin(opts) {
   setTimeout(() => {
     loading.classList.add('hidden');
     game.requestPointerLock();
-    game.ui.toast(opts.load ? 'World loaded. Welcome back.' : 'Welcome to VOXHAVEN.', 'good');
+    game.ui.toast(opts.load ? 'World loaded. Welcome back.' : 'Welcome to EVERCRAFT.', 'good');
     if (!opts.load) {
       setTimeout(() => game.ui.toast('Punch a tree to begin. Press <b>G</b> for the field guide.'), 2200);
     }
@@ -324,4 +324,4 @@ window.addEventListener('DOMContentLoaded', () => {
 });
 
 // expose for debugging / automated testing
-window.__VOXHAVEN = { get game() { return game; }, begin, Game };
+window.__EVERCRAFT = { get game() { return game; }, begin, Game };

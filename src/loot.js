@@ -1,4 +1,4 @@
-// VOXHAVEN - loot tables for world-generated chests.
+// EVERCRAFT - loot tables for world-generated chests.
 //
 // Tuning brief: "balanced". A ruin chest should feel like a genuine reward for
 // exploring without letting a player skip a whole tier of progression. So the

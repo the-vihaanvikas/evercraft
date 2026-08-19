@@ -1,10 +1,11 @@
-// VOXHAVEN - main game loop, interaction, saves, input.
+// EVERCRAFT - main game loop, interaction, saves, input.
 
 import * as THREE from '../vendor/three.module.js';
 import {
   B, BLOCKS, block, isSolid, ITEM, itemDef, itemName, miningTime, canHarvest,
   blockDrop, itemIdForBlock, CHUNK_X, CHUNK_Z, WORLD_H, SEA_LEVEL, ARMOR_SLOTS,
-  LADDER_DIR, TORCH_DIR,
+  LADDER_DIR, TORCH_DIR, BED_FOOT_DIR, BED_HEAD_DIR,
+  DOOR_CLOSED_LOW, DOOR_CLOSED_TOP, DOOR_OPEN_LOW, DOOR_OPEN_TOP,
 } from './blocks.js';
 import { World, ckey } from './world.js';
 import { Player, raycast, matOf, HOTBAR, INV_SIZE, mkStack, stackMax } from './player.js';
@@ -12,15 +13,34 @@ import { Entity, SPECIES, pickSpawnKind } from './entities.js';
 import { WorldGen, BIOME, BIOME_INFO, findSpawn } from './worldgen.js';
 import {
   makeMaterials, Sky, Particles, ItemDrops, BreakOverlay, Weather, Projectiles, blockColor,
-  ChestRenderer,
+  ChestRenderer, LanternRenderer,
 } from './render.js';
 import { Audio } from './audio.js';
 import { UI, addToContainer, smeltTime } from './ui.js';
 import { RECIPES, SMELT, FUEL, TAGS, isTag } from './recipes.js';
 import { hashString } from './noise.js';
 
-const SAVE_PREFIX = 'voxhaven.save.';
-const SETTINGS_KEY = 'voxhaven.settings';
+const SAVE_PREFIX = 'evercraft.save.';
+const SETTINGS_KEY = 'evercraft.settings';
+
+// One-time, non-destructive migration from the legacy branding. Existing
+// worlds stay playable after the rename; new-key data always wins and old keys
+// are kept as a fallback instead of being deleted unexpectedly.
+function migrateLegacyStorage() {
+  if (typeof localStorage === 'undefined') return;
+  try {
+    const legacy = ['vox', 'haven.'].join('');
+    for (let i = 1; i <= 3; i++) {
+      const next = SAVE_PREFIX + i, old = legacy + 'save.' + i;
+      if (localStorage.getItem(next) === null && localStorage.getItem(old) !== null)
+        localStorage.setItem(next, localStorage.getItem(old));
+    }
+    const oldSettings = legacy + 'settings';
+    if (localStorage.getItem(SETTINGS_KEY) === null && localStorage.getItem(oldSettings) !== null)
+      localStorage.setItem(SETTINGS_KEY, localStorage.getItem(oldSettings));
+  } catch { /* private browsing/storage quota: normal save handling reports it */ }
+}
+migrateLegacyStorage();
 const DAY_LENGTH = 600; // seconds for a full cycle
 
 export class Game {
@@ -29,7 +49,9 @@ export class Game {
     this.running = false;
     this.paused = false;
     this.time = 0;
-    this.worldTime = DAY_LENGTH * 0.22;   // start mid-morning
+    // New worlds begin at 07:12: bright early morning, just after exposed
+    // night hostiles have burned away in the rising sun.
+    this.worldTime = DAY_LENGTH * 0.30;
     this.frame = 0;
     this.fps = 60;
     this.fpsAcc = 0; this.fpsCount = 0;
@@ -191,6 +213,10 @@ export class Game {
 
     document.addEventListener('pointerlockchange', () => {
       this.pointerLocked = document.pointerLockElement === this.canvas;
+      // Browsers occasionally deliver one stale, screen-sized movement delta
+      // while entering pointer lock. Dropping that first packet prevents the
+      // rare seemingly random 90/180-degree view jump.
+      if (this.pointerLocked) this._ignoreMouseMoveUntil = performance.now() + 55;
       if (!this.pointerLocked && this.running && !this.ui.isOpen() && !this.player?.dead) {
         this.ui.open('pause');
       }
@@ -198,10 +224,8 @@ export class Game {
 
     window.addEventListener('mousemove', (e) => {
       if (!this.pointerLocked || !this.player) return;
-      const s = 0.0022 * this.sensitivity;
-      this.player.yaw -= e.movementX * s;
-      this.player.pitch -= e.movementY * s * (this.invertY ? -1 : 1);
-      this.player.pitch = Math.max(-Math.PI / 2 + 0.001, Math.min(Math.PI / 2 - 0.001, this.player.pitch));
+      if (performance.now() < (this._ignoreMouseMoveUntil || 0)) return;
+      this._applyLookDelta(e.movementX, e.movementY);
     });
 
     window.addEventListener('wheel', (e) => {
@@ -216,6 +240,25 @@ export class Game {
       this.ui.toast(`Controller connected: ${e.gamepad.id.slice(0, 28)}`, 'good');
     });
     window.addEventListener('gamepaddisconnected', () => { this.gamepadIndex = null; });
+  }
+
+  _applyLookDelta(dx, dy) {
+    if (!Number.isFinite(dx) || !Number.isFinite(dy)) return;
+    // Genuine mouse packets are small even at high DPI. Pointer-lock bugs can
+    // report a delta equal to the entire desktop width; cap only those outliers
+    // while preserving normal fast flicks.
+    const limit = 180;
+    dx = Math.max(-limit, Math.min(limit, dx));
+    dy = Math.max(-limit, Math.min(limit, dy));
+    const s = 0.0022 * this.sensitivity;
+    this.player.yaw -= dx * s;
+    this.player.pitch -= dy * s * (this.invertY ? -1 : 1);
+    // Bound yaw as well as pitch to retain floating-point precision in worlds
+    // played for many hours.
+    if (this.player.yaw > Math.PI || this.player.yaw < -Math.PI)
+      this.player.yaw = ((this.player.yaw + Math.PI) % (Math.PI * 2) + Math.PI * 2) % (Math.PI * 2) - Math.PI;
+    this.player.pitch = Math.max(-Math.PI / 2 + 0.001,
+      Math.min(Math.PI / 2 - 0.001, this.player.pitch));
   }
 
   _onKeyDown(k, e) {
@@ -303,10 +346,7 @@ export class Game {
         if (ly > 0) inp.back = Math.max(inp.back, ly);
         if (lx < 0) inp.left = Math.max(inp.left, -lx);
         if (lx > 0) inp.right = Math.max(inp.right, lx);
-        const s = 0.055 * this.sensitivity;
-        p.yaw -= rx * s;
-        p.pitch -= ry * s * (this.invertY ? -1 : 1);
-        p.pitch = Math.max(-Math.PI / 2 + 0.001, Math.min(Math.PI / 2 - 0.001, p.pitch));
+        this._applyLookDelta(rx * 25, ry * 25);
       }
       const btn = i => pad.buttons[i] && pad.buttons[i].pressed;
       const pressed = i => { const now = btn(i); const was = this.gpPrev[i]; this.gpPrev[i] = now; return now && !was; };
@@ -371,13 +411,15 @@ export class Game {
     this.gen = new WorldGen(seed);
 
     this.world = new World(this.scene, seed, this.materials);
-    // chests render as animated block entities rather than plain cubes
+    // Chests and lanterns render as animated block entities rather than cubes.
     if (this.chests) this.chests.clear();
+    if (this.lanterns) this.lanterns.clear();
     this.chests = new ChestRenderer(this.scene, this.materials, this.materials.texIndex);
+    this.lanterns = new LanternRenderer(this.scene);
     this._chestScanT = 0;
     this.player = new Player(this.world, this.audio);
     this.itemDrops = new ItemDrops(this.scene, this.world);
-    window.__VOX_ITEM = ITEM;
+    window.__EVERCRAFT_ITEM = ITEM;
 
     await this.world.initWorker(this.materials.texIndex, save ? save.edits : null);
 
@@ -397,19 +439,17 @@ export class Game {
       this.player.spawnPoint = { x: sp.x, y: sp.y, z: sp.z };
       this.mode = opts.mode === 'creative' ? 'creative' : 'survival';
       this.player.creative = this.mode === 'creative';
+      this.worldTime = DAY_LENGTH * 0.30;
       if (!this.player.creative) this.player.flying = false;
-      if (this.player.creative) {
-        // creative: a useful palette to build with straight away
-        for (const it of ['stone', 'plank_aspen', 'glass', 'stone_bricks',
-          'torch', 'lumen', 'bricks', 'wool_white', 'ladder'])
-          this.player.inv.add(it, 64);
-      } else {
+      if (!this.player.creative) {
         // survival starter kit
         this.player.inv.add('plank_aspen', 4);
         this.player.inv.add('stick', 4);
         this.player.inv.add('sunberry', 3);
         this.player.inv.add('torch', 4);
       }
+      // Creative intentionally starts empty. The tabbed palette supplies any
+      // item on demand without cluttering or pre-filling the player's hotbar.
     }
     this.slot = opts.slot ?? 1;
 
@@ -465,6 +505,7 @@ export class Game {
     }
 
     this._updateChests(dt);
+    if (this.lanterns) this.lanterns.update(this.time, this.camera.position);
     this._updateAvatar(dt);
     this._updateCamera(dt);
     this._updateLighting();
@@ -670,8 +711,12 @@ export class Game {
     if (!this.avatar) this.avatar = this._buildAvatar();
     const a = this.avatar, ud = a.userData;
     a.visible = true;
-    a.position.set(p.pos.x, p.pos.y, p.pos.z);
     a.rotation.y = p.yaw;
+    const swimTarget = p.swimming ? 1 : 0;
+    this._avSwim = (this._avSwim || 0) + (swimTarget - (this._avSwim || 0)) *
+      (1 - Math.exp(-7 * dt));
+    a.rotation.x = -1.36 * this._avSwim;
+    a.position.set(p.pos.x, p.pos.y + this._avSwim * 0.68, p.pos.z);
 
     const speed = Math.hypot(p.vel.x, p.vel.z);
     const moving = speed > 0.25;
@@ -701,6 +746,20 @@ export class Game {
       ud.arms[0].rotation.x = 1.15; ud.arms[1].rotation.x = 1.15;
       ud.legs[0].rotation.x = -0.25; ud.legs[1].rotation.x = -0.18;
     }
+    // Sprint-swimming: lay the whole avatar into the water and use a broad,
+    // alternating crawl visible from both rear and front third-person views.
+    if (this._avSwim > 0.02) {
+      const crawl = Math.sin(this._avGait * 0.72);
+      const sAmp = this._avSwim;
+      ud.arms[0].rotation.x = (-1.0 + crawl * 1.05) * sAmp;
+      ud.arms[1].rotation.x = (-1.0 - crawl * 1.05) * sAmp;
+      ud.arms[0].rotation.z = 0.24 * crawl * sAmp;
+      ud.arms[1].rotation.z = -0.24 * crawl * sAmp;
+      ud.legs[0].rotation.x = crawl * 0.22 * sAmp;
+      ud.legs[1].rotation.x = -crawl * 0.22 * sAmp;
+    } else {
+      ud.arms[0].rotation.z = 0;
+    }
     // head follows pitch so the avatar looks where the player looks
     ud.head.rotation.x = -p.pitch * 0.75;
     ud.hair.rotation.x = -p.pitch * 0.75;
@@ -712,8 +771,8 @@ export class Game {
       h.position.z = -Math.sin(rx) * (ud.TORSO - 1.5 / 16);
       h.rotation.x = rx;
     });
-    // sneak crouch
-    a.position.y = p.pos.y - (p.sneaking ? 0.14 : 0);
+    // sneak crouch (blended swim height was applied above)
+    a.position.y = p.pos.y + this._avSwim * 0.68 - (p.sneaking ? 0.14 : 0);
   }
 
   /**
@@ -747,14 +806,24 @@ export class Game {
   _updateCamera(dt) {
     const p = this.player;
     const eye = p.eyePos();
-    // view bob
-    let bobY = 0, bobX = 0, roll = 0;
-    if (!p.flying && p.onGround) {
-      const amp = p.sprinting ? 0.055 : 0.035;
-      bobY = Math.abs(Math.sin(p.bobPhase * 3.1)) * amp;
-      bobX = Math.sin(p.bobPhase * 1.55) * amp * 0.7;
-      roll = Math.sin(p.bobPhase * 1.55) * 0.012;
+    // Smooth view bob. The old abs(sin) waveform had a mathematical cusp at
+    // every footfall and snapped instantly between walking/sprinting amplitudes.
+    // Continuous sine targets plus exponential damping feel weighty at any FPS.
+    let targetY = 0, targetX = 0, targetRoll = 0;
+    if (!p.flying && p.onGround && Math.hypot(p.vel.x, p.vel.z) > 0.12) {
+      const amp = p.sprinting ? 0.046 : 0.029;
+      targetY = -Math.cos(p.bobPhase * 3.0) * amp * 0.52;
+      targetX = Math.sin(p.bobPhase * 1.5) * amp * 0.52;
+      targetRoll = Math.sin(p.bobPhase * 1.5) * (p.sprinting ? 0.009 : 0.006);
+    } else if (p.swimming) {
+      targetY = Math.sin(this.time * 2.0) * 0.009;
+      targetRoll = Math.sin(this.time * 1.35) * 0.004;
     }
+    const smooth = 1 - Math.exp(-10 * dt);
+    this._camBobY = (this._camBobY || 0) + (targetY - (this._camBobY || 0)) * smooth;
+    this._camBobX = (this._camBobX || 0) + (targetX - (this._camBobX || 0)) * smooth;
+    this._camRoll = (this._camRoll || 0) + (targetRoll - (this._camRoll || 0)) * smooth;
+    const bobY = this._camBobY, bobX = this._camBobX, roll = this._camRoll;
     const dir = new THREE.Vector3(
       -Math.sin(p.yaw) * Math.cos(p.pitch),
       Math.sin(p.pitch),
@@ -818,9 +887,20 @@ export class Game {
     const m = this._handMesh;
     const bobY = Math.sin(p.bobPhase * 3.1) * 0.008 * (p.onGround ? 1 : 0);
     const bobX = Math.sin(p.bobPhase * 1.55) * 0.009 * (p.onGround ? 1 : 0);
-    // keep the view model small and tucked into the lower-right corner
-    m.position.set(0.34 + bobX - s * 0.06, -0.33 + bobY - s * 0.10, -0.62 + s * 0.14);
+    // Keep the view model attached to the lower-right edge. An empty arm gets
+    // a little more screen presence and extends through the viewport edge,
+    // rather than looking like a disconnected floating cuboid.
+    const empty = !id;
+    const ex = empty ? 0.09 : 0, ey = empty ? -0.055 : 0, ez = empty ? 0.035 : 0;
+    m.position.set(0.34 + ex + bobX - s * 0.06, -0.33 + ey + bobY - s * 0.10, -0.62 + ez + s * 0.14);
     m.rotation.set(-0.24 - s * 1.35, 0.40 + s * 0.28, 0.14 + s * 0.3);
+    if (p.swimming) {
+      const crawl = Math.sin(this.time * 5.2);
+      m.position.x += crawl * 0.055;
+      m.position.y += Math.cos(this.time * 5.2) * 0.04;
+      m.rotation.x = -0.72 + crawl * 0.62;
+      m.rotation.z = 0.30 - crawl * 0.20;
+    }
   }
 
   /**
@@ -832,15 +912,15 @@ export class Game {
   _makeArm() {
     const g = new THREE.Group();
     const skin = 0xe0a479, sleeve = 0x4f7fc4;
-    // upper sleeve, angled back toward the camera
-    const arm = new THREE.Mesh(new THREE.BoxGeometry(0.115, 0.115, 0.34),
+    // Long enough to continue naturally out through the viewport edge.
+    const arm = new THREE.Mesh(new THREE.BoxGeometry(0.14, 0.14, 0.48),
       new THREE.MeshLambertMaterial({ color: sleeve }));
-    arm.position.set(0, 0, 0.09);
+    arm.position.set(0, 0, 0.13);
     g.add(arm);
     // bare hand at the far end
-    const hand = new THREE.Mesh(new THREE.BoxGeometry(0.125, 0.125, 0.14),
+    const hand = new THREE.Mesh(new THREE.BoxGeometry(0.15, 0.15, 0.16),
       new THREE.MeshLambertMaterial({ color: skin }));
-    hand.position.set(0, 0, -0.13);
+    hand.position.set(0, 0, -0.18);
     g.add(hand);
     return g;
   }
@@ -935,7 +1015,8 @@ export class Game {
       const bl = BLOCKS[hit.id];
       if (bl && bl.use) {
         const label = bl.use === 'bench' ? 'Craft' : bl.use === 'smelter' ? 'Open Smelter'
-          : bl.use === 'crate' ? 'Open Chest' : 'Open';
+          : bl.use === 'crate' ? 'Open Chest' : bl.use === 'bed' ? 'Sleep / Set Spawn'
+            : bl.use === 'door' ? (bl.open ? 'Close Door' : 'Open Door') : 'Open';
         this.ui.hint(`<kbd>RMB</kbd> ${label}`);
       } else this.ui.hint('');
     } else this.ui.hint('');
@@ -974,11 +1055,16 @@ export class Game {
     }
     const m = p.mining;
     if (p.creative) {
-      // Creative breaks the targeted block immediately, then requires the
-      // player to re-press. Running a very short timer meant holding the
-      // button bulldozed everything the crosshair swept over.
-      if (this._creativeBroke !== `${hit.x},${hit.y},${hit.z}`) {
-        this._creativeBroke = `${hit.x},${hit.y},${hit.z}`;
+      // Deliberate 0.18s press plus one block per click. This is still much
+      // faster than Survival, but no longer deletes a wall from an accidental
+      // tap or bulldozes a line of blocks while the button remains held.
+      if (this._creativeBroke) return;
+      m.progress += dt / 0.18;
+      p.swingT = Math.max(p.swingT, 0.001);
+      if (p.swingT <= 0.02) p.swingT = 1;
+      this.breakOverlay.show(hit.x, hit.y, hit.z, m.progress);
+      if (m.progress >= 1) {
+        this._creativeBroke = true;
         p.swingT = 1;
         this.audio.dig(matOf(hit.id), 1);
         this._breakBlock(hit.x, hit.y, hit.z, hit.id);
@@ -1013,9 +1099,23 @@ export class Game {
 
   _breakBlock(x, y, z, id) {
     const p = this.player;
-    // door: break both halves
-    if (id === B.DOOR_LOW) this.world.setBlock(x, y + 1, z, 0);
-    if (id === B.DOOR_TOP) { this.world.setBlock(x, y - 1, z, 0); y = y - 1; id = B.DOOR_LOW; }
+    const original = BLOCKS[id];
+    // Doors: break both halves for every orientation/open state.
+    if (original && original.door) {
+      const lowY = original.doorTop ? y - 1 : y;
+      this.world.setBlock(x, original.doorTop ? y - 1 : y + 1, z, 0);
+      if (original.doorTop) this.world.setBlock(x, y, z, 0);
+      y = lowY; id = B.DOOR_LOW;
+    }
+    // Beds: remove the other horizontal half and drop one canonical bed.
+    if (original && original.bed) {
+      const dirs = [[0, -1], [1, 0], [0, 1], [-1, 0]];
+      const [dx, dz] = dirs[original.bedDir & 3];
+      const ox = original.bedHead ? x - dx : x + dx;
+      const oz = original.bedHead ? z - dz : z + dz;
+      this.world.setBlock(ox, y, oz, 0);
+      id = B.BED_FOOT_N;
+    }
     // tall grass: breaking either half removes both, and always drops from the base
     if (id === B.TALL_GRASS) this.world.setBlock(x, y + 1, z, 0);
     if (id === B.TALL_GRASS_TOP) { this.world.setBlock(x, y - 1, z, 0); y = y - 1; id = B.TALL_GRASS; }
@@ -1135,6 +1235,23 @@ export class Game {
         placeId = LADDER_DIR[anyWall[2]];
       }
     }
+
+    // Oriented multi-block furniture.
+    const yawQ = ((Math.round(p.yaw / (Math.PI / 2)) % 4) + 4) % 4;
+    const facing = [0, 3, 2, 1][yawQ];
+    let secondBlock = null;
+    if (placeId === B.DOOR_LOW) placeId = DOOR_CLOSED_LOW[facing];
+    if (placeId === B.BED_FOOT_N) {
+      const dirs = [[0, -1], [1, 0], [0, 1], [-1, 0]];
+      const [dx, dz] = dirs[facing];
+      const hx = bx + dx, hz = bz + dz;
+      const hid = this.world.getBlock(hx, by, hz);
+      if (hid !== 0 && !(BLOCKS[hid] && (BLOCKS[hid].render === 2 || BLOCKS[hid].liquid))) {
+        this.audio.error(); return;
+      }
+      placeId = BED_FOOT_DIR[facing];
+      secondBlock = { x: hx, y: by, z: hz, id: BED_HEAD_DIR[facing] };
+    }
     const placeBl = BLOCKS[placeId];
 
     // player collision check
@@ -1147,12 +1264,22 @@ export class Game {
         this.audio.error();
         return;
       }
+      if (secondBlock && secondBlock.x + 1 > px0 && secondBlock.x < px1 &&
+        secondBlock.y + 1 > py0 && secondBlock.y < py1 &&
+        secondBlock.z + 1 > pz0 && secondBlock.z < pz1) {
+        this.audio.error(); return;
+      }
       for (const e of this.entities) {
         if (e.dead) continue;
         const ew = e.w / 2;
         if (bx + 1 > e.pos.x - ew && bx < e.pos.x + ew &&
           by + 1 > e.pos.y && by < e.pos.y + e.h &&
           bz + 1 > e.pos.z - ew && bz < e.pos.z + ew) { this.audio.error(); return; }
+        if (secondBlock && secondBlock.x + 1 > e.pos.x - ew && secondBlock.x < e.pos.x + ew &&
+          secondBlock.y + 1 > e.pos.y && secondBlock.y < e.pos.y + e.h &&
+          secondBlock.z + 1 > e.pos.z - ew && secondBlock.z < e.pos.z + ew) {
+          this.audio.error(); return;
+        }
       }
     }
 
@@ -1165,14 +1292,20 @@ export class Game {
       return;
     }
 
-    // doors need 2 blocks
-    if (placeId === B.DOOR_LOW) {
+    // Doors need vertical headroom; beds need solid support beneath both halves.
+    if (placeBl.door && !placeBl.doorTop) {
       const up = this.world.getBlock(bx, by + 1, bz);
       if (up !== 0 && !(BLOCKS[up] && BLOCKS[up].render === 2)) { this.audio.error(); return; }
     }
+    if (secondBlock) {
+      const underHead = this.world.getBlock(secondBlock.x, by - 1, secondBlock.z);
+      if (!isSolid(below) || !isSolid(underHead)) { this.audio.error(); return; }
+    }
 
     if (!this.world.setBlock(bx, by, bz, placeId)) return;
-    if (placeId === B.DOOR_LOW) this.world.setBlock(bx, by + 1, bz, B.DOOR_TOP);
+    if (placeBl.door && !placeBl.doorTop)
+      this.world.setBlock(bx, by + 1, bz, DOOR_CLOSED_TOP[placeBl.doorDir]);
+    if (secondBlock) this.world.setBlock(secondBlock.x, secondBlock.y, secondBlock.z, secondBlock.id);
     if (placeId === B.TALL_GRASS && this.world.getBlock(bx, by + 1, bz) === 0)
       this.world.setBlock(bx, by + 1, bz, B.TALL_GRASS_TOP);
     if (placeBl.use === 'crate') {
@@ -1221,49 +1354,78 @@ export class Game {
         this.audio.open();
         break;
       }
-      case 'door': {
-        // toggle by swapping to air-ish "open" — represent by removing collision:
-        // simple approach: shift door blocks to an adjacent free cell
+      case 'door':
         this._toggleDoor(x, y, z);
         break;
-      }
+      case 'bed':
+        this._sleepAt(x, y, z, bl);
+        break;
     }
   }
 
   _toggleDoor(x, y, z) {
-    const id = this.world.getBlock(x, y, z);
-    const lowY = id === B.DOOR_TOP ? y - 1 : y;
-    const key = `door:${x},${lowY},${z}`;
-    const st = this.world.containers.get(key) || { kind: 'door', open: false, ox: 0, oz: 0 };
-    if (!st.open) {
-      // find a free adjacent cell to swing into
-      const dirs = [[1, 0], [-1, 0], [0, 1], [0, -1]];
-      let target = null;
-      for (const [dx, dz] of dirs) {
-        const a = this.world.getBlock(x + dx, lowY, z + dz);
-        const b = this.world.getBlock(x + dx, lowY + 1, z + dz);
-        if (a === 0 && b === 0) { target = [dx, dz]; break; }
-      }
-      if (!target) { this.audio.error(); return; }
-      this.world.setBlock(x, lowY, z, 0);
-      this.world.setBlock(x, lowY + 1, z, 0);
-      this.world.setBlock(x + target[0], lowY, z + target[1], B.DOOR_LOW);
-      this.world.setBlock(x + target[0], lowY + 1, z + target[1], B.DOOR_TOP);
-      this.world.containers.delete(key);
-      this.world.containers.set(`door:${x + target[0]},${lowY},${z + target[1]}`,
-        { kind: 'door', open: true, ox: -target[0], oz: -target[1] });
-    } else {
-      const nx = x + st.ox, nz = z + st.oz;
-      const a = this.world.getBlock(nx, lowY, nz), b = this.world.getBlock(nx, lowY + 1, nz);
-      if (a !== 0 || b !== 0) { this.audio.error(); return; }
-      this.world.setBlock(x, lowY, z, 0);
-      this.world.setBlock(x, lowY + 1, z, 0);
-      this.world.setBlock(nx, lowY, nz, B.DOOR_LOW);
-      this.world.setBlock(nx, lowY + 1, nz, B.DOOR_TOP);
-      this.world.containers.delete(key);
-      this.world.containers.set(`door:${nx},${lowY},${nz}`, { kind: 'door', open: false, ox: 0, oz: 0 });
+    const bl = BLOCKS[this.world.getBlock(x, y, z)];
+    if (!bl || !bl.door) return;
+    const lowY = bl.doorTop ? y - 1 : y;
+    const dir = bl.doorDir & 3;
+    const opening = !bl.open;
+    this.world.setBlock(x, lowY, z, (opening ? DOOR_OPEN_LOW : DOOR_CLOSED_LOW)[dir]);
+    this.world.setBlock(x, lowY + 1, z, (opening ? DOOR_OPEN_TOP : DOOR_CLOSED_TOP)[dir]);
+    this.audio.door(opening);
+  }
+
+  _sleepAt(x, y, z, bl) {
+    const p = this.player;
+    const dirs = [[0, -1], [1, 0], [0, 1], [-1, 0]];
+    const [dx, dz] = dirs[bl.bedDir & 3];
+    const headX = bl.bedHead ? x : x + dx;
+    const headZ = bl.bedHead ? z : z + dz;
+    // Beds always set a respawn point, even when it is too early to sleep.
+    // Prefer a supported two-block-high cell beside the bed; generated beds
+    // near a wall must not respawn the player inside that wall.
+    const px = dz, pz = -dx;
+    const footX = headX - dx, footZ = headZ - dz;
+    const spots = [
+      [headX + px, headZ + pz], [headX - px, headZ - pz],
+      [footX + px, footZ + pz], [footX - px, footZ - pz],
+      [headX + dx, headZ + dz],
+    ];
+    const safe = spots.find(([sx, sz]) => isSolid(this.world.getBlock(sx, y - 1, sz)) &&
+      !isSolid(this.world.getBlock(sx, y, sz)) && !isSolid(this.world.getBlock(sx, y + 1, sz)));
+    const [spawnX, spawnZ] = safe || spots[0];
+    p.spawnPoint = { x: spawnX + 0.5, y: y + 0.05, z: spawnZ + 0.5 };
+
+    const t = this.dayFraction();
+    const night = t >= 0.72 || t < 0.235;
+    if (!night) {
+      this.ui.toast('Respawn point set. You can only sleep at night.', 'info');
+      this.audio.click();
+      return;
     }
-    this.audio.door(!st.open);
+    const danger = this.entities.some(e => !e.dead && !e.def.friendly &&
+      e.pos.distanceToSquared(p.pos) < 10 * 10);
+    if (danger) {
+      this.ui.toast('You cannot sleep while hostile creatures are nearby.', 'bad');
+      this.audio.error();
+      return;
+    }
+
+    // Advance to the next 07:12 morning and clear exposed night creatures. Any
+    // hostile under a roof/cave remains, matching normal daylight behaviour.
+    const day = Math.floor(this.worldTime / DAY_LENGTH);
+    this.worldTime = (day + (t >= 0.30 ? 1 : 0)) * DAY_LENGTH + DAY_LENGTH * 0.30;
+    for (const e of this.entities) {
+      if (!e.dead && e.def.burns && this.world.hasSkyAccess(e.pos.x, e.pos.y + e.h, e.pos.z)) {
+        e.dead = true;
+        e.despawned = true; // sunrise cleanup is not a player kill and drops no loot
+      }
+    }
+    p.health = Math.min(p.maxHealth, p.health + 4);
+    p.air = p.maxAir;
+    this.ui.sleepFlash();
+    this.ui.toast('Good morning. Respawn point set.', 'good');
+    this.audio.click();
+    this.save(true);
   }
 
   _pickBlock() {
@@ -1322,14 +1484,16 @@ export class Game {
 
   canCraft(r) {
     if (r.bench && !this.nearBench) return false;
-    for (const [id, n] of r.need) if (this.countFor(id) < n) return false;
+    // Creative recipes are previews/convenience, never resource-gated.
+    if (!this.player.creative)
+      for (const [id, n] of r.need) if (this.countFor(id) < n) return false;
     return this.player.inv.hasSpace(r.out, r.count);
   }
 
   craft(r) {
     if (!this.canCraft(r)) { this.audio.error(); return false; }
     const p = this.player;
-    for (const [id, n] of r.need) {
+    if (!p.creative) for (const [id, n] of r.need) {
       if (isTag(id)) {
         let left = n;
         for (const it of TAGS[id]) {
@@ -1369,6 +1533,7 @@ export class Game {
     const R = 5;  // chunk radius
     const pcx = Math.floor(px / CHUNK_X), pcz = Math.floor(pz / CHUNK_Z);
     const seen = new Set();
+    const seenLanterns = new Set();
 
     for (let dz = -R; dz <= R; dz++) {
       for (let dx = -R; dx <= R; dx++) {
@@ -1377,17 +1542,19 @@ export class Game {
 
         // A full 32k scan per chunk per sweep would be wasteful, so cache the
         // chest positions found in a chunk and only rescan when it changes.
-        if (!c._chestList) {
-          const list = [];
+        if (!c._chestList || !c._lanternList) {
+          const chests = [], lanterns = [];
           const b = c.blocks;
           for (let i = 0; i < b.length; i++) {
-            if (b[i] !== B.CRATE) continue;
+            if (b[i] !== B.CRATE && b[i] !== B.LANTERN) continue;
             const y = (i / 256) | 0;
             const rem = i - y * 256;
             const lz = (rem / CHUNK_X) | 0;
-            list.push([rem - lz * CHUNK_X, y, lz]);
+            const pos = [rem - lz * CHUNK_X, y, lz];
+            (b[i] === B.CRATE ? chests : lanterns).push(pos);
           }
-          c._chestList = list;
+          c._chestList = chests;
+          c._lanternList = lanterns;
         }
 
         for (const [lx, y, lz] of c._chestList) {
@@ -1404,13 +1571,25 @@ export class Game {
             this.chests.add(wx, y, wz, dir);
           }
         }
+        for (const [lx, y, lz] of c._lanternList) {
+          const wx = c.cx * CHUNK_X + lx, wz = c.cz * CHUNK_Z + lz;
+          if (Math.abs(wx - px) > 88 || Math.abs(wz - pz) > 88) continue;
+          const key = `${wx},${y},${wz}`;
+          seenLanterns.add(key);
+          if (this.lanterns && !this.lanterns.has(wx, y, wz)) this.lanterns.add(wx, y, wz);
+        }
       }
     }
-    // drop chests that were broken or streamed out of range
+    // drop fixtures that were broken or streamed out of range
     for (const key of [...this.chests.chests.keys()]) {
       if (seen.has(key)) continue;
       const [x, y, z] = key.split(',').map(Number);
       this.chests.remove(x, y, z);
+    }
+    if (this.lanterns) for (const key of [...this.lanterns.lanterns.keys()]) {
+      if (seenLanterns.has(key)) continue;
+      const [x, y, z] = key.split(',').map(Number);
+      this.lanterns.remove(x, y, z);
     }
   }
 
@@ -1907,7 +2086,7 @@ export class Game {
     const mem = performance.memory ? ` · heap ${(performance.memory.usedJSHeapSize / 1048576).toFixed(0)}MB` : '';
     const info = this.renderer.info;
     el.innerHTML = `
-      <b>VOXHAVEN</b> ${this.fps.toFixed(0)} fps${mem}<br>
+      <b>EVERCRAFT</b> ${this.fps.toFixed(0)} fps${mem}<br>
       xyz ${p.pos.x.toFixed(2)} / ${p.pos.y.toFixed(2)} / ${p.pos.z.toFixed(2)}<br>
       chunk ${Math.floor(p.pos.x / 16)}, ${Math.floor(p.pos.z / 16)} · loaded ${this.world.chunks.size}<br>
       draws ${info.render.calls} · tris ${(info.render.triangles / 1000).toFixed(1)}k<br>

@@ -1,4 +1,4 @@
-// VOXHAVEN - player state, physics, inventory, survival stats.
+// EVERCRAFT - player state, physics, inventory, survival stats.
 
 import * as THREE from '../vendor/three.module.js';
 import {
@@ -89,6 +89,7 @@ export class Player {
     this.headInLava = false;
     this.onLadder = false;
     this.sprinting = false;
+    this.swimming = false;
     this.sneaking = false;
     this.flying = false;
     this.creative = false;
@@ -170,6 +171,7 @@ export class Player {
     if (input.left) wish.sub(right);
     const moving = wish.lengthSq() > 0.0001;
     if (moving) wish.normalize();
+    this.swimming = this.inWater && this.sprinting && moving && !this.flying;
 
     let speed = 4.35;
     if (this.sneaking) speed = 1.5;
@@ -210,6 +212,12 @@ export class Player {
       } else if (this.inWater) {
         this.vel.y -= G * 0.28 * dt;
         this.vel.y = Math.max(this.vel.y, -4.2);
+        if (this.swimming && input.forward) {
+          // Sprint-swimming follows the look direction instead of forcing the
+          // player to bunny-hop vertically through water.
+          const targetY = Math.sin(this.pitch) * 4.1;
+          this.vel.y += (targetY - this.vel.y) * Math.min(1, dt * 5.5);
+        }
         if (input.jump) this.vel.y = Math.min(this.vel.y + 30 * dt, 3.4);
       } else if (this.onLadder) {
         this.vel.y = input.jump ? 3.2 : (moving || input.sneak ? (input.sneak ? -2.6 : -1.2) : -0.6);
@@ -257,11 +265,13 @@ export class Player {
     const moved = startPos.distanceTo(this.pos);
     this.stats.distance += moved;
     if (this.pos.y < this.stats.deepest) this.stats.deepest = Math.floor(this.pos.y);
+    // Animation phase is visual state and must advance in Creative too.
+    if (moving && (this.onGround || this.swimming))
+      this.bobPhase += moved * (this.sprinting ? 2.35 : 1.9);
 
     if (!this.creative) {
       if (moving && this.onGround) {
         this.exhaustion += (this.sprinting ? 0.10 : 0.03) * dt * 4;
-        this.bobPhase += moved * (this.sprinting ? 2.4 : 2.0);
         if (Math.sin(this.bobPhase * 3.1) > 0.94) {
           const gid = this.world.getBlock(this.pos.x, this.pos.y - 0.2, this.pos.z);
           this.audio.step(this.inWater ? 'water' : matOf(gid));
