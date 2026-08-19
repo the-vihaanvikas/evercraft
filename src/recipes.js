@@ -1,4 +1,4 @@
-// VOXHAVEN - crafting & smelting recipes (original progression design)
+// EVERCRAFT - crafting & smelting recipes (original progression design)
 
 import { B, ITEM, TOOL_KINDS, TOOL_MATS, ARMOR_SLOTS, ARMOR_MATS } from './blocks.js';
 
@@ -65,7 +65,8 @@ shaped('basics', 'torch', 4, ['C', 'S'], { C: '#coal', S: 'stick' });
 shaped('basics', 'smelter', 1, ['SSS', 'S S', 'SSS'], { S: '#stone' }, true);
 shaped('basics', 'crate', 1, ['PPP', 'P P', 'PPP'], { P: '#planks' }, true);
 shaped('basics', 'ladder', 3, ['S S', 'SSS', 'S S'], { S: 'stick' }, true);
-shaped('basics', 'door_low', 1, ['PP', 'PP', 'PP'], { P: '#planks' }, true);
+shaped('basics', 'door_low', 3, ['PP', 'PP', 'PP'], { P: '#planks' }, true);
+shaped('basics', 'bed', 1, ['WWW', 'PPP'], { W: '#wool', P: '#planks' }, true);
 shaped('basics', 'shears', 1, [' I', 'I '], { I: 'iron_ingot' }, true);
 shapeless('basics', 'charcoal', 1, [['#logs', 1], ['ember_dust', 1]], false);
 shapeless('basics', 'bone_meal', 3, [['bone', 1]], false);

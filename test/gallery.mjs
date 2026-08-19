@@ -14,14 +14,14 @@ page.on('console', m => { if (m.type() === 'error') errors.push(m.text()); });
 
 await page.goto(URL, { waitUntil: 'networkidle2', timeout: 60000 });
 await new Promise(r => setTimeout(r, 1400));
-await page.screenshot({ path: '/home/user/voxhaven/test/title.png' });
+await page.screenshot({ path: '/home/user/evercraft/test/title.png' });
 
-await page.evaluate(() => window.__VOXHAVEN.begin({ slot: 3, name: 'Gallery', seed: 'voxhaven-demo', load: false }));
+await page.evaluate(() => window.__EVERCRAFT.begin({ slot: 3, name: 'Gallery', seed: 'evercraft-demo', load: false }));
 await page.waitForFunction(() => document.querySelector('#loading').classList.contains('hidden'), { timeout: 90000 });
 
 // go to night on a good surface spot, check hostile spawns
 const night = await page.evaluate(async () => {
-  const g = window.__VOXHAVEN.game;
+  const g = window.__EVERCRAFT.game;
   const sleep = ms => new Promise(r => setTimeout(r, ms));
   let best = null;
   for (const c of g.world.chunks.values()) {
@@ -54,11 +54,11 @@ const night = await page.evaluate(async () => {
     pos: g.player.pos.toArray().map(v => +v.toFixed(1)), biome: g.biomeName() };
 });
 console.log('night:', JSON.stringify(night));
-await page.screenshot({ path: '/home/user/voxhaven/test/night.png' });
+await page.screenshot({ path: '/home/user/evercraft/test/night.png' });
 
 // inventory with gear
 await page.evaluate(() => {
-  const g = window.__VOXHAVEN.game;
+  const g = window.__EVERCRAFT.game;
   g.player.armor.helm = { id: 'helm_iron', count: 1, dur: 300 };
   g.player.armor.chest = { id: 'chest_iron', count: 1, dur: 220 };
   g.player.armor.legs = { id: 'legs_copper', count: 1, dur: 100 };
@@ -74,23 +74,23 @@ await page.evaluate(() => {
   g.ui.open('inventory');
 });
 await new Promise(r => setTimeout(r, 600));
-await page.screenshot({ path: '/home/user/voxhaven/test/inv.png' });
+await page.screenshot({ path: '/home/user/evercraft/test/inv.png' });
 
 // smelter UI mid-burn
 await page.evaluate(() => {
-  const g = window.__VOXHAVEN.game;
+  const g = window.__EVERCRAFT.game;
   g.ui.close();
   const c = { kind: 'smelter', input: { id: 'raw_iron', count: 5 }, fuel: { id: 'coal', count: 3 },
     out: { id: 'iron_ingot', count: 2 }, burn: 6, burnMax: 12, cook: 2.4 };
   g.ui.open('smelter', { container: c, pos: [0, 0, 0] });
 });
 await new Promise(r => setTimeout(r, 500));
-await page.screenshot({ path: '/home/user/voxhaven/test/smelter.png' });
+await page.screenshot({ path: '/home/user/evercraft/test/smelter.png' });
 
 // guide
-await page.evaluate(() => { const g = window.__VOXHAVEN.game; g.ui.close(); g.ui.open('guide'); });
+await page.evaluate(() => { const g = window.__EVERCRAFT.game; g.ui.close(); g.ui.open('guide'); });
 await new Promise(r => setTimeout(r, 500));
-await page.screenshot({ path: '/home/user/voxhaven/test/guide.png' });
+await page.screenshot({ path: '/home/user/evercraft/test/guide.png' });
 
 await browser.close();
 console.log('errors:', errors.length ? errors.slice(0, 8) : 'none');

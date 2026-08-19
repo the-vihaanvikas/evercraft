@@ -1,4 +1,4 @@
-// VOXHAVEN - block & item registry (original design)
+// EVERCRAFT - block & item registry (original design)
 
 export const CHUNK_X = 16;
 export const CHUNK_Z = 16;
@@ -40,12 +40,37 @@ export const B = {
   // value names the wall the fixture is ATTACHED to.
   LADDER_N: 86, LADDER_E: 87, LADDER_S: 88, LADDER_W: 89,
   TORCH_N: 90, TORCH_E: 91, TORCH_S: 92, TORCH_W: 93,
+
+  // Beds occupy two horizontal cells. The direction names where the HEAD is
+  // relative to the foot; separate ids keep orientation deterministic without
+  // adding a metadata array to every chunk.
+  BED: 94, BED_FOOT_N: 94, BED_FOOT_E: 95, BED_FOOT_S: 96, BED_FOOT_W: 97,
+  BED_HEAD_N: 98, BED_HEAD_E: 99, BED_HEAD_S: 100, BED_HEAD_W: 101,
+
+  // Oriented and open door states. Existing ids 54/55 remain the north-facing
+  // closed state so old saves continue to load correctly.
+  DOOR_E_LOW: 102, DOOR_E_TOP: 103, DOOR_S_LOW: 104, DOOR_S_TOP: 105,
+  DOOR_W_LOW: 106, DOOR_W_TOP: 107,
+  DOOR_OPEN_N_LOW: 108, DOOR_OPEN_N_TOP: 109,
+  DOOR_OPEN_E_LOW: 110, DOOR_OPEN_E_TOP: 111,
+  DOOR_OPEN_S_LOW: 112, DOOR_OPEN_S_TOP: 113,
+  DOOR_OPEN_W_LOW: 114, DOOR_OPEN_W_TOP: 115,
 };
 
 /** wall-mounted ladder ids indexed by attach dir (0=-Z,1=+X,2=+Z,3=-X) */
 export const LADDER_DIR = [86, 87, 88, 89];
 /** wall-mounted torch ids indexed by attach dir */
 export const TORCH_DIR = [90, 91, 92, 93];
+/** bed ids indexed by head direction (0=-Z,1=+X,2=+Z,3=-X) */
+export const BED_FOOT_DIR = [94, 95, 96, 97];
+export const BED_HEAD_DIR = [98, 99, 100, 101];
+/** door state ids indexed by facing */
+export const DOOR_CLOSED_LOW = [54, 102, 104, 106];
+export const DOOR_CLOSED_TOP = [55, 103, 105, 107];
+export const DOOR_OPEN_LOW = [108, 110, 112, 114];
+export const DOOR_OPEN_TOP = [109, 111, 113, 115];
+
+const BLOCK_COUNT = 116;
 
 // render classes
 export const R_SOLID = 0;   // full opaque cube
@@ -55,6 +80,7 @@ export const R_LIQUID = 3;  // water / lava
 export const R_TORCH = 4;   // small post
 export const R_LADDER = 5;  // flat panel on wall
 export const R_DOOR = 6;    // thin panel
+export const R_BED = 7;     // low two-cell bed model
 
 const D = [];
 function def(id, o) { D[id] = Object.assign({ id }, o); return D[id]; }
@@ -151,7 +177,11 @@ def(B.SMELTER_LIT, { n: 'Smelter', tex: { top: 'smelter_top', bottom: 'smelter_t
 def(B.CRATE, { n: 'Chest', tex: { top: 'crate_top', bottom: 'crate_top', side: 'crate_side', front: 'crate_front' }, hard: 1.5, tool: 'axe', use: 'crate', dir: true, blockEntity: 'chest', opacity: 0 });
 
 def(B.TORCH, { n: 'Torch', tex: 'torch', render: R_TORCH, noCollide: true, opacity: 0, light: 14, hard: 0.05 });
-def(B.LANTERN, { n: 'Lantern', tex: 'lantern', render: R_SOLID, opacity: 0, light: 15, hard: 0.6 });
+// Lanterns are articulated block entities. The chunk still stores a normal
+// light-emitting block id, while LanternRenderer supplies the small hanging
+// model and its gentle swing on the main thread.
+def(B.LANTERN, { n: 'Lantern', tex: 'lantern', render: R_SOLID, opacity: 0, light: 15,
+  hard: 0.6, noCollide: true, blockEntity: 'lantern' });
 def(B.LADDER, { n: 'Ladder', tex: 'ladder', render: R_LADDER, noCollide: true, climb: true, opacity: 0, hard: 0.4, dir: true });
 // Wall-mounted ladders and torches. `wallDir` is the face they cling to and
 // drives the mesher's placement; they drop the plain item so the inventory
@@ -167,8 +197,33 @@ for (let d = 0; d < 4; d++) {
   });
 }
 
-def(B.DOOR_LOW, { n: 'Timber Door', tex: 'door_low', render: R_DOOR, noCollide: false, opacity: 0, hard: 1.0, dir: true, use: 'door' });
-def(B.DOOR_TOP, { n: 'Timber Door', tex: 'door_top', render: R_DOOR, noCollide: false, opacity: 0, hard: 1.0, dir: true, use: 'door', drop: 'door_low' });
+// Doors remain in their own two cells when opened: state ids change the model
+// and collision instead of physically teleporting the blocks to a neighbour.
+const doorDef = (id, dir, top, open) => def(id, {
+  n: 'Timber Door', tex: top ? 'door_top' : 'door_low', render: R_DOOR,
+  noCollide: open, opacity: 0, hard: 1.0, use: 'door', drop: 'door_low',
+  door: true, doorDir: dir, doorTop: top, open, hidden: id !== B.DOOR_LOW,
+});
+doorDef(B.DOOR_LOW, 0, false, false); doorDef(B.DOOR_TOP, 0, true, false);
+doorDef(B.DOOR_E_LOW, 1, false, false); doorDef(B.DOOR_E_TOP, 1, true, false);
+doorDef(B.DOOR_S_LOW, 2, false, false); doorDef(B.DOOR_S_TOP, 2, true, false);
+doorDef(B.DOOR_W_LOW, 3, false, false); doorDef(B.DOOR_W_TOP, 3, true, false);
+doorDef(B.DOOR_OPEN_N_LOW, 0, false, true); doorDef(B.DOOR_OPEN_N_TOP, 0, true, true);
+doorDef(B.DOOR_OPEN_E_LOW, 1, false, true); doorDef(B.DOOR_OPEN_E_TOP, 1, true, true);
+doorDef(B.DOOR_OPEN_S_LOW, 2, false, true); doorDef(B.DOOR_OPEN_S_TOP, 2, true, true);
+doorDef(B.DOOR_OPEN_W_LOW, 3, false, true); doorDef(B.DOOR_OPEN_W_TOP, 3, true, true);
+
+// Beds use a low custom model. Only the canonical north-facing foot appears in
+// the inventory; every other half/state drops that same item.
+const bedDef = (id, dir, head) => def(id, {
+  n: 'Bed', tex: head ? 'bed_head' : 'bed_foot', render: R_BED,
+  opacity: 0, hard: 0.7, use: 'bed', drop: 'bed', bed: true,
+  bedDir: dir, bedHead: head, hidden: id !== B.BED_FOOT_N,
+});
+for (let d = 0; d < 4; d++) {
+  bedDef(B.BED_FOOT_N + d, d, false);
+  bedDef(B.BED_HEAD_N + d, d, true);
+}
 
 def(B.SHORT_GRASS, { n: 'Wild Grass', tex: 'short_grass', render: R_CROSS, noCollide: true, opacity: 0, hard: 0.05, drop: 'seeds', dropChance: 0.35 });
 def(B.TALL_GRASS, { n: 'Tall Grass', tex: 'tall_grass', render: R_CROSS, noCollide: true, opacity: 0, hard: 0.05, drop: 'seeds', dropChance: 0.5 });
@@ -189,14 +244,14 @@ def(B.WOOL_VIOLET, { n: 'Violet Wool', tex: 'wool_violet', hard: 0.8, tool: 'she
 def(B.WOOL_SLATE, { n: 'Slate Wool', tex: 'wool_slate', hard: 0.8, tool: 'shears' });
 
 // fill gaps
-for (let i = 0; i < 96; i++) if (!D[i]) D[i] = D[0] || null;
+for (let i = 0; i < BLOCK_COUNT; i++) if (!D[i]) D[i] = D[0] || null;
 
 def(B.AIR, { n: 'Air', tex: null, render: -1, noCollide: true, opacity: 0, hard: -1 });
 D[0] = { id: 0, n: 'Air', tex: null, render: -1, noCollide: true, opacity: 0, light: 0, hard: -1 };
 
 // normalise defaults
 export const BLOCKS = [];
-for (let i = 0; i < 96; i++) {
+for (let i = 0; i < BLOCK_COUNT; i++) {
   const d = D[i];
   if (!d || d.id !== i) { BLOCKS[i] = null; continue; }
   BLOCKS[i] = {
@@ -231,6 +286,13 @@ for (let i = 0; i < 96; i++) {
     // undefined means floor-standing
     wallDir: d.wallDir === undefined ? undefined : d.wallDir,
     hidden: !!d.hidden,
+    door: !!d.door,
+    doorDir: d.doorDir === undefined ? 0 : d.doorDir,
+    doorTop: !!d.doorTop,
+    open: !!d.open,
+    bed: !!d.bed,
+    bedDir: d.bedDir === undefined ? 0 : d.bedDir,
+    bedHead: !!d.bedHead,
   };
 }
 
@@ -351,7 +413,7 @@ function itemIdForBlock(id) {
     [B.CHISELED]: 'chiseled', [B.TILE_DARK]: 'tile_dark', [B.SLAB_STONE]: 'slab_stone',
     [B.LUMEN]: 'lumen', [B.BENCH]: 'bench', [B.SMELTER]: 'smelter', [B.CRATE]: 'crate',
     [B.TORCH]: 'torch', [B.LANTERN]: 'lantern', [B.LADDER]: 'ladder',
-    [B.DOOR_LOW]: 'door_low', [B.TALL_GRASS]: 'tall_grass',
+    [B.DOOR_LOW]: 'door_low', [B.BED_FOOT_N]: 'bed', [B.TALL_GRASS]: 'tall_grass',
     [B.SHORT_GRASS]: 'short_grass', [B.FERN]: 'fern',
     [B.FLOWER_SUN]: 'flower_sun', [B.FLOWER_DUSK]: 'flower_dusk', [B.MUSHROOM]: 'mushroom',
     [B.BERRY_BUSH]: 'berry_bush', [B.CACTUS]: 'cactus',
@@ -361,12 +423,17 @@ function itemIdForBlock(id) {
     [B.GOLD_BLOCK]: 'gold_block', [B.AURORITE_BLOCK]: 'aurorite_block', [B.GLIMMER_BLOCK]: 'glimmer_block',
     [B.WATER]: 'water', [B.LAVA]: 'lava',
   };
+  if (id >= B.LADDER_N && id <= B.LADDER_W) return 'ladder';
+  if (id >= B.TORCH_N && id <= B.TORCH_W) return 'torch';
+  const bl = BLOCKS[id];
+  if (bl && bl.door) return 'door_low';
+  if (bl && bl.bed) return 'bed';
   return names[id] || null;
 }
 
 for (let i = 1; i < BLOCKS.length; i++) {
   const b = BLOCKS[i];
-  if (!b) continue;
+  if (!b || b.hidden) continue;
   const iid = itemIdForBlock(i);
   if (!iid) continue;
   BLOCK_ITEM[iid] = i;

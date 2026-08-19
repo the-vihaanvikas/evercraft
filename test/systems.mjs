@@ -130,11 +130,11 @@ check('atlas has cutout pixels (plants/glass)', tex.transparent > 1000);
 
 // ------------------------------------------------------------- live gameplay
 console.log('\n[live gameplay]');
-await page.evaluate(() => window.__VOXHAVEN.begin({ slot: 2, name: 'SysTest', seed: 'alpha-1', load: false }));
+await page.evaluate(() => window.__EVERCRAFT.begin({ slot: 2, name: 'SysTest', seed: 'alpha-1', load: false }));
 await page.waitForFunction(() => document.querySelector('#loading').classList.contains('hidden'), { timeout: 90000 });
 
 const play = await page.evaluate(async () => {
-  const g = window.__VOXHAVEN.game;
+  const g = window.__EVERCRAFT.game;
   const { RECIPES } = await import('/src/recipes.js');
   const { B } = await import('/src/blocks.js');
   const sleep = ms => new Promise(r => setTimeout(r, ms));
@@ -284,7 +284,7 @@ check('day/night cycle swings light', play.dayNight, `noon ${play.lightVals[0]},
 // ------------------------------------------------- save/load determinism test
 console.log('\n[save/load fidelity]');
 const before = await page.evaluate(() => {
-  const g = window.__VOXHAVEN.game;
+  const g = window.__EVERCRAFT.game;
   // make a distinctive edit tower
   const bx = Math.floor(g.player.pos.x), by = Math.floor(g.player.pos.y) + 4, bz = Math.floor(g.player.pos.z);
   for (let i = 0; i < 5; i++) g.world.setBlock(bx, by + i, bz, 37);
@@ -294,10 +294,10 @@ const before = await page.evaluate(() => {
     pos: g.player.pos.toArray().map(v => +v.toFixed(2)), level: g.player.level };
 });
 await page.reload({ waitUntil: 'networkidle2' });
-await page.evaluate(() => window.__VOXHAVEN.begin({ slot: 2, load: true }));
+await page.evaluate(() => window.__EVERCRAFT.begin({ slot: 2, load: true }));
 await page.waitForFunction(() => document.querySelector('#loading').classList.contains('hidden'), { timeout: 90000 });
 const after = await page.evaluate(async (b) => {
-  const g = window.__VOXHAVEN.game;
+  const g = window.__EVERCRAFT.game;
   const sleep = ms => new Promise(r => setTimeout(r, ms));
   for (let i = 0; i < 60 && !g.world.isLoaded(b.bx, b.bz); i++) await sleep(150);
   await sleep(900);
@@ -370,7 +370,7 @@ check('tall grass reaches higher than short', tiles.tallMid > tiles.shortTop,
 
 console.log('\n[two-block tall grass]');
 const tg = await page.evaluate(async () => {
-  const g = window.__VOXHAVEN.game;
+  const g = window.__EVERCRAFT.game;
   const { B } = await import('/src/blocks.js');
   const sleep = ms => new Promise(r => setTimeout(r, ms));
   const p = g.player;
@@ -450,7 +450,7 @@ console.log('\n[mobs: remastered models & flight]');
 const mobs = await page.evaluate(async () => {
   const { Entity, SPECIES } = await import('/src/entities.js');
   const { isSolid } = await import('/src/blocks.js');
-  const g = window.__VOXHAVEN.game;
+  const g = window.__EVERCRAFT.game;
   const ctx = { audio: { crit() {}, hurt() {}, die() {} }, daylight: 0,
     particles: { burst() {} }, drops: { spawn() {} }, spawnProjectile() {} };
   const out = { parts: {}, plume: null, flapWired: false };
@@ -514,7 +514,7 @@ const chest = await page.evaluate(async () => {
   const { B, BLOCKS, block } = await import('/src/blocks.js');
   const { rollChestLoot, chestRng } = await import('/src/loot.js');
   const { itemDef } = await import('/src/blocks.js');
-  const g = window.__VOXHAVEN.game;
+  const g = window.__EVERCRAFT.game;
   const out = {};
 
   out.name = BLOCKS[B.CRATE].n;
@@ -659,7 +659,7 @@ check('leg swing is a natural amplitude', ge.every(([, r]) => r.legsSwing !== fa
 console.log('\n[camera & creative flight]');
 const cam = await page.evaluate(async () => {
   const THREE = await import('/vendor/three.module.js');
-  const g = window.__VOXHAVEN.game, p = g.player;
+  const g = window.__EVERCRAFT.game, p = g.player;
   const out = {}; const saveMode = g.cameraMode;
   p.yaw = 0; p.pitch = 0;                    // yaw 0 faces -Z
   const eye = p.eyePos();
@@ -722,7 +722,7 @@ check('leaving flight deals no fall damage', cam.noFlightFallDamage);
 
 console.log('\n[music]');
 const mus = await page.evaluate(async () => {
-  const a = window.__VOXHAVEN.game.audio;
+  const a = window.__EVERCRAFT.game.audio;
   a.init(); a.resume();
   const notes = [];
   const orig = a._voice.bind(a);
@@ -809,7 +809,7 @@ console.log('\n--- round 3: fluids, chests, burning, crafting, creative ---');
 
 const r3 = await page.evaluate(async () => {
   const { B, BLOCKS } = await import('/src/blocks.js');
-  const g = window.__VOXHAVEN.game, w = g.world;
+  const g = window.__EVERCRAFT.game, w = g.world;
   const out = {};
 
   // ---------- fluid flow ----------
@@ -897,7 +897,7 @@ check('generated chest does not face into a wall', r3.facingAwayFromWall !== 0,
 const burn = await page.evaluate(async () => {
   const { Entity } = await import('/src/entities.js');
   const { B } = await import('/src/blocks.js');
-  const g = window.__VOXHAVEN.game, w = g.world;
+  const g = window.__EVERCRAFT.game, w = g.world;
   const ctx = { audio: { crit(){}, hurt(){}, die(){}, fizz(){}, hitEntity(){}, step(){} },
     daylight: 1, particles: { spawn(){}, burst(){} }, drops: { spawn(){} }, spawnProjectile(){} };
   const px = Math.floor(g.player.pos.x) + 40, pz = Math.floor(g.player.pos.z) + 40;
@@ -940,7 +940,7 @@ const cr = await page.evaluate(async () => {
   const { ITEM, BLOCKS, B } = await import('/src/blocks.js');
   const { CREATIVE_CATS, CREATIVE_PALETTE, paletteCount } = await import('/src/creative.js');
   const { matchGrid } = await import('/src/recipes.js');
-  const g = window.__VOXHAVEN.game, ui = g.ui, out = {};
+  const g = window.__EVERCRAFT.game, ui = g.ui, out = {};
   const grid = (o, n) => { const a = new Array(n * n).fill(null);
     for (const k in o) a[k] = { id: o[k], count: 9 }; return a; };
   const P = 'plank_aspen';
@@ -1020,7 +1020,7 @@ console.log('\n--- round 4: step-up, HUD, camera, arm, plants, perf ---');
 const climb = await page.evaluate(async () => {
   const { Entity } = await import('/src/entities.js');
   const { B } = await import('/src/blocks.js');
-  const g = window.__VOXHAVEN.game, w = g.world;
+  const g = window.__EVERCRAFT.game, w = g.world;
   const ctx = { audio: { crit(){}, hurt(){}, die(){}, fizz(){}, hitEntity(){}, step(){} },
     daylight: 0, particles: { spawn(){}, burst(){} }, drops: { spawn(){} }, spawnProjectile(){} };
   // Build close to the player: by this point in the suite the world has been
@@ -1073,7 +1073,7 @@ check('no species climbs a 2-block wall', wall.every(([, v]) => !v),
 
 // ---- HUD pips keep a fixed size when damaged ----
 const pips = await page.evaluate(() => {
-  const g = window.__VOXHAVEN.game;
+  const g = window.__EVERCRAFT.game;
   const read = () => {
     const el = document.getElementById('healthRow');
     return [...el.querySelectorAll('.pip')].map(x => {
@@ -1098,7 +1098,7 @@ check('empty heart pips are the same size as full ones',
 
 // ---- camera toggle must not navigate, and must show/hide the arm ----
 const camTog = await page.evaluate(() => {
-  const g = window.__VOXHAVEN.game;
+  const g = window.__EVERCRAFT.game;
   const out = { prevented: [], modes: [] };
   for (const code of ['F5', 'KeyV']) {
     const ev = new KeyboardEvent('keydown', { code, cancelable: true, bubbles: true });
@@ -1124,7 +1124,7 @@ check('the held-item view model shows in first person only',
 
 // ---- the first-person arm is actually substantial on screen ----
 const arm = await page.evaluate(() => {
-  const g = window.__VOXHAVEN.game, cv = document.querySelector('#gl');
+  const g = window.__EVERCRAFT.game, cv = document.querySelector('#gl');
   g.cameraMode = 0; g.player.pitch = -0.35; g._updateCamera(0.016);
   const pct = () => {
     const grab = () => {
@@ -1155,7 +1155,7 @@ check('a held tool is visibly drawn in first person', arm.tool > 1.5,
 const plants = await page.evaluate(async () => {
   const { buildChunkMesh, setTexIndex } = await import('/src/mesher.js');
   const { B } = await import('/src/blocks.js');
-  const g = window.__VOXHAVEN.game;
+  const g = window.__EVERCRAFT.game;
   // count how many vertices one flower contributes
   const w = g.world;
   const px = Math.floor(g.player.pos.x) + 90, pz = Math.floor(g.player.pos.z) + 90;
@@ -1169,7 +1169,7 @@ check('cutout material is double-sided so plants need only one quad set',
 
 // ---- perf plumbing ----
 const perfChk = await page.evaluate(async () => {
-  const g = window.__VOXHAVEN.game;
+  const g = window.__EVERCRAFT.game;
   const out = {};
   out.hasAdapt = typeof g._adaptQuality === 'function';
   out.pixelRatioCapped = g._maxPixelRatio <= 1.5;
@@ -1216,7 +1216,7 @@ const r5 = await page.evaluate(async () => {
   const { B, BLOCKS, LADDER_DIR, TORCH_DIR } = await import('/src/blocks.js');
   const { Entity } = await import('/src/entities.js');
   const THREE = await import('/vendor/three.module.js');
-  const g = window.__VOXHAVEN.game, w = g.world, ui = g.ui;
+  const g = window.__EVERCRAFT.game, w = g.world, ui = g.ui;
   const out = {};
 
   // ---- panels must not replay their open animation on a re-render ----
@@ -1377,7 +1377,7 @@ check('no mob shows a gap between body and limbs mid-swing', r5.noLimbGaps,
 
 // creative mining breaks one block per click rather than a stream of them
 const creaMine = await page.evaluate(() => {
-  const g = window.__VOXHAVEN.game;
+  const g = window.__EVERCRAFT.game;
   return { hasLatch: '_creativeBroke' in g || true,
     clearsOnRelease: g._cancelMining.toString().includes('_creativeBroke') };
 });

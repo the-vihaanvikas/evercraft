@@ -1,4 +1,4 @@
-// VOXHAVEN - background worker: terrain generation + greedy-ish mesh building.
+// EVERCRAFT - background worker: terrain generation + greedy-ish mesh building.
 
 import { WorldGen } from './worldgen.js';
 import { buildChunkMesh, setTexIndex } from './mesher.js';

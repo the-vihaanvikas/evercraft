@@ -1,4 +1,4 @@
-// VOXHAVEN - materials, sky, particles, item drops, damage overlay.
+// EVERCRAFT - materials, sky, particles, item drops, damage overlay.
 
 import * as THREE from '../vendor/three.module.js';
 import { TILE, buildTileLayers } from './textures.js';
@@ -97,8 +97,12 @@ export function makeMaterials(renderer) {
   tex.format = THREE.RGBAFormat;
   tex.type = THREE.UnsignedByteType;
   tex.magFilter = THREE.NearestFilter;
-  tex.minFilter = THREE.NearestMipmapLinearFilter;
-  tex.generateMipmaps = true;
+  // Interpolating between generated mip levels changed binary alpha coverage
+  // whenever the camera moved by a fraction of a pixel. Leaves, grass and
+  // ladders consequently sparkled under slow mouse movement. Keep the authored
+  // 16px texels stable and let the alpha test see the same 0/1 mask every frame.
+  tex.minFilter = THREE.NearestFilter;
+  tex.generateMipmaps = false;
   tex.wrapS = THREE.ClampToEdgeWrapping;
   tex.wrapT = THREE.ClampToEdgeWrapping;
   const maxAniso = renderer.capabilities.getMaxAnisotropy();
@@ -318,68 +322,47 @@ export class Sky {
 
   _buildClouds() {
     const g = new THREE.Group();
-    // Two materials: a bright lit top/side and a shaded underside, which is
-    // what actually sells volume. A single flat white material with
-    // overlapping transparent boxes just looked like a smudge with seams.
-    const lit = new THREE.MeshLambertMaterial({
-      color: 0xffffff, transparent: true, opacity: 0.94, depthWrite: true,
-      emissive: 0x2a3550, emissiveIntensity: 0.35, fog: true,
-    });
     const rnd = (a, b) => a + Math.random() * (b - a);
 
-    // A cloud is a blobby cluster of boxes on a coarse voxel grid. Building it
-    // from a small heightfield (rather than random overlapping slabs) gives a
-    // silhouette that reads as one solid puffy mass from every angle.
-    const makeCloud = () => {
-      const cluster = new THREE.Group();
-      const CW = 5 + ((Math.random() * 4) | 0);      // cells across
-      const CD = 4 + ((Math.random() * 4) | 0);
-      const cell = 9;                                 // world units per cell
-      const cx = (CW - 1) / 2, cz = (CD - 1) / 2;
-      const boxes = [];
-      for (let ix = 0; ix < CW; ix++) {
-        for (let iz = 0; iz < CD; iz++) {
-          // distance from centre, normalised: puffier in the middle
-          const dx = (ix - cx) / (cx + 0.6), dz = (iz - cz) / (cz + 0.6);
-          const r = Math.sqrt(dx * dx + dz * dz);
-          const bias = 1 - r * r;
-          if (bias < 0.06 || Math.random() > bias + 0.28) continue;
-          // 1-3 stacked layers, tallest at the core
-          const layers = Math.max(1, Math.round(bias * 2.6 + rnd(-0.35, 0.45)));
-          for (let ly = 0; ly < layers; ly++) {
-            const shrink = ly * 0.16;
-            boxes.push([
-              (ix - cx) * cell, ly * 5.0, (iz - cz) * cell,
-              cell * (1.06 - shrink), 5.4, cell * (1.06 - shrink),
-            ]);
-          }
-        }
-      }
-      // merge into as few meshes as possible - one mesh per cloud
-      const geos = boxes.map(([x, y, z, w, h, d]) => {
-        const bg = new THREE.BoxGeometry(w, h, d);
-        bg.translate(x, y, z);
-        return bg;
-      });
-      if (!geos.length) return null;
-      const merged = mergeBoxGeometries(geos);
-      geos.forEach(x => x.dispose());
-      const m = new THREE.Mesh(merged, lit);
-      m.frustumCulled = true;
-      cluster.add(m);
-      return cluster;
+    // Paint one high-resolution, feathered cloud card. Layered radial gradients
+    // form a soft puffy top and a subtly blue-grey underside without chunky
+    // box seams or the dark overlap artefacts of transparent cubes.
+    const canvas = document.createElement('canvas');
+    canvas.width = 256; canvas.height = 128;
+    const c = canvas.getContext('2d');
+    const puff = (x, y, r, top, bottom) => {
+      const gr = c.createRadialGradient(x, y - r * 0.18, r * 0.08, x, y, r);
+      gr.addColorStop(0, top);
+      gr.addColorStop(0.62, bottom);
+      gr.addColorStop(1, 'rgba(184,205,224,0)');
+      c.fillStyle = gr;
+      c.beginPath(); c.arc(x, y, r, 0, Math.PI * 2); c.fill();
     };
+    puff(65, 73, 46, 'rgba(255,255,255,.98)', 'rgba(220,231,242,.80)');
+    puff(105, 55, 58, 'rgba(255,255,255,1)', 'rgba(220,231,242,.84)');
+    puff(151, 60, 53, 'rgba(255,255,255,.99)', 'rgba(213,226,239,.82)');
+    puff(193, 76, 42, 'rgba(252,253,255,.96)', 'rgba(201,218,234,.72)');
+    puff(126, 84, 67, 'rgba(250,252,255,.92)', 'rgba(188,207,226,.65)');
+    const tex = new THREE.CanvasTexture(canvas);
+    tex.colorSpace = THREE.SRGBColorSpace;
+    tex.minFilter = THREE.LinearFilter;
+    tex.magFilter = THREE.LinearFilter;
+    tex.generateMipmaps = true;
+    const mat = new THREE.SpriteMaterial({
+      map: tex, color: 0xffffff, transparent: true, opacity: 0.82,
+      depthWrite: false, depthTest: true, fog: true,
+    });
 
-    for (let i = 0; i < 26; i++) {
-      const c = makeCloud();
-      if (!c) continue;
-      c.position.set(rnd(-620, 620), rnd(104, 136), rnd(-620, 620));
-      const sc = rnd(0.75, 1.5);
-      c.scale.set(sc, rnd(0.7, 1.15) * sc, sc);
-      c.rotation.y = rnd(0, Math.PI * 2);
-      g.add(c);
+    for (let i = 0; i < 28; i++) {
+      const cloud = new THREE.Sprite(mat);
+      cloud.position.set(rnd(-680, 680), rnd(112, 158), rnd(-680, 680));
+      const w = rnd(75, 155);
+      cloud.scale.set(w, w * rnd(0.28, 0.42), 1);
+      cloud.material.rotation = 0;
+      g.add(cloud);
     }
-    this.cloudMat = lit;
+    this.cloudMat = mat;
+    this.cloudTexture = tex;
     return g;
   }
 
@@ -547,7 +530,7 @@ export class ItemDrops {
   _visual(itemId) {
     const key = itemId;
     if (this._geoCache.has(key)) return { geo: this._geoCache.get(key), mat: this._matCache.get(key) };
-    const def = (window.__VOX_ITEM || {})[itemId];
+    const def = (window.__EVERCRAFT_ITEM || {})[itemId];
     let geo, mat;
     if (def && def.block) {
       geo = new THREE.BoxGeometry(0.32, 0.32, 0.32);
@@ -817,6 +800,83 @@ export class Projectiles {
     }
   }
   clear() { for (const p of this.list) this.group.remove(p.mesh); this.list.length = 0; }
+}
+
+// ---------------------------------------------------------- lantern entity
+/**
+ * Small hanging lanterns replace the old full luminous cube. Geometry is
+ * shared between every instance; only a lightweight pivot group is allocated
+ * per block so each lantern can sway at a slightly different phase.
+ */
+export class LanternRenderer {
+  constructor(scene) {
+    this.group = new THREE.Group();
+    scene.add(this.group);
+    this.lanterns = new Map();
+
+    const iron = new THREE.MeshLambertMaterial({ color: 0x343944, emissive: 0x11141a });
+    const warm = new THREE.MeshLambertMaterial({
+      color: 0xffd276, emissive: 0xffa52f, emissiveIntensity: 1.65,
+      transparent: true, opacity: 0.88, depthWrite: true,
+    });
+    this.materials = { iron, warm };
+    this.geos = {
+      chain: new THREE.BoxGeometry(0.035, 0.24, 0.035),
+      cap: new THREE.BoxGeometry(0.30, 0.07, 0.30),
+      glow: new THREE.BoxGeometry(0.25, 0.31, 0.25),
+      bar: new THREE.BoxGeometry(0.035, 0.38, 0.035),
+      foot: new THREE.BoxGeometry(0.34, 0.08, 0.34),
+    };
+  }
+
+  add(x, y, z) {
+    const key = `${x},${y},${z}`;
+    if (this.lanterns.has(key)) return this.lanterns.get(key);
+    const pivot = new THREE.Group();
+    pivot.position.set(x + 0.5, y + 0.98, z + 0.5);
+    const { iron, warm } = this.materials;
+    const mesh = (geo, mat, px, py, pz) => {
+      const m = new THREE.Mesh(geo, mat);
+      m.position.set(px, py, pz);
+      pivot.add(m);
+      return m;
+    };
+    mesh(this.geos.chain, iron, 0, -0.10, 0);
+    mesh(this.geos.cap, iron, 0, -0.25, 0);
+    mesh(this.geos.glow, warm, 0, -0.44, 0);
+    for (const sx of [-0.14, 0.14]) for (const sz of [-0.14, 0.14])
+      mesh(this.geos.bar, iron, sx, -0.43, sz);
+    mesh(this.geos.foot, iron, 0, -0.64, 0);
+    this.group.add(pivot);
+    const phase = ((Math.imul(x, 73856093) ^ Math.imul(z, 19349663)) >>> 0) / 4294967296 * Math.PI * 2;
+    const rec = { x, y, z, pivot, phase };
+    this.lanterns.set(key, rec);
+    return rec;
+  }
+
+  has(x, y, z) { return this.lanterns.has(`${x},${y},${z}`); }
+  remove(x, y, z) {
+    const key = `${x},${y},${z}`;
+    const rec = this.lanterns.get(key);
+    if (!rec) return;
+    this.group.remove(rec.pivot);
+    this.lanterns.delete(key);
+  }
+  clear() {
+    for (const rec of this.lanterns.values()) this.group.remove(rec.pivot);
+    this.lanterns.clear();
+  }
+  update(t, camPos) {
+    const FAR = 88 * 88;
+    for (const rec of this.lanterns.values()) {
+      const dx = rec.x - camPos.x, dz = rec.z - camPos.z;
+      rec.pivot.visible = dx * dx + dz * dz < FAR;
+      if (!rec.pivot.visible) continue;
+      // Small, slow and phase-offset: atmosphere rather than a pendulum ride.
+      rec.pivot.rotation.z = Math.sin(t * 1.18 + rec.phase) * 0.045;
+      rec.pivot.rotation.x = Math.sin(t * 0.91 + rec.phase * 1.7) * 0.025;
+    }
+  }
 }
 
 // ------------------------------------------------------------ chest entity

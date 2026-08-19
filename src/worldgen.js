@@ -1,4 +1,4 @@
-// VOXHAVEN - procedural world generation (worker-safe, no DOM).
+// EVERCRAFT - procedural world generation (worker-safe, no DOM).
 
 import { Noise, mulberry32, clamp, lerp, smoothstep } from './noise.js';
 import { B, CHUNK_X, CHUNK_Z, WORLD_H, SEA_LEVEL } from './blocks.js';
@@ -231,7 +231,13 @@ export class WorldGen {
         // water / ice fill
         if (h < SEA_LEVEL) {
           for (let y = h + 1; y <= SEA_LEVEL; y++) set(lx, y, lz, B.WATER);
-          if (col.temp < -0.34 && SEA_LEVEL - h < 24) set(lx, SEA_LEVEL, lz, B.ICE);
+          // Ice only forms in a broad, genuinely frigid inland depression.
+          // A single cold noise sample used to sprinkle lone ice in forest
+          // ponds and even build huge random sheets across the open ocean.
+          const frozenInland = col.land > 0.72 && col.temp < -0.48 &&
+            this.temperature(wx + 12, wz) < -0.40 && this.temperature(wx - 12, wz) < -0.40 &&
+            this.temperature(wx, wz + 12) < -0.40 && this.temperature(wx, wz - 12) < -0.40;
+          if (frozenInland && SEA_LEVEL - h <= 5) set(lx, SEA_LEVEL, lz, B.ICE);
         }
       }
     }
@@ -696,8 +702,8 @@ export class WorldGen {
     // window + door
     set(lx + 2, h + 2, lz - 1, B.GLASS);
     set(lx + w, h + 2, lz + 2, B.GLASS);
-    set(lx + 2, h + 1, lz - 1, B.AIR);
-    set(lx + 2, h + 2, lz - 1, B.AIR);
+    set(lx + 2, h + 1, lz - 1, B.DOOR_LOW);
+    set(lx + 2, h + 2, lz - 1, B.DOOR_TOP);
     // pitched roof
     for (let r = 0; r <= 2; r++) {
       const y = h + 4 + r;
@@ -705,11 +711,9 @@ export class WorldGen {
         for (let dx = -1 + r; dx <= w - r; dx++)
           set(lx + dx, y, lz + dz, plank);
     }
-    // interior
-    const wools = [B.WOOL_RED, B.WOOL_TEAL, B.WOOL_AMBER, B.WOOL_VIOLET, B.WOOL_WHITE];
-    const wool = wools[(rnd() * wools.length) | 0];
-    set(lx, h + 1, lz + d - 1, wool);
-    set(lx + 1, h + 1, lz + d - 1, wool);
+    // interior: a functional east-facing bed replaces the decorative wool pair
+    set(lx, h + 1, lz + d - 1, B.BED_FOOT_E);
+    set(lx + 1, h + 1, lz + d - 1, B.BED_HEAD_E);
     set(lx + w - 1, h + 1, lz + 1, B.CRATE);
     set(lx + w - 2, h + 1, lz + 1, B.AIR);
     if (rnd() < 0.7) set(lx + w - 1, h + 1, lz + d - 1, B.BENCH);
@@ -717,35 +721,52 @@ export class WorldGen {
     set(lx + 2, h + 3, lz + 2, B.LANTERN);
   }
 
-  /** Watchtower: a tall shaft with a ladder and a lit crown. */
+  /** Watchtower: climbable hatch, usable roof deck, light and guaranteed loot. */
   watchtower(set, get, lx, lz, h, bio, rnd, flat) {
     if (flat && flat(2) > 3) return;
     const stone = bio === BIOME.DUNES || bio === BIOME.RUST_FLATS
       ? B.SANDSTONE : B.STONE_BRICKS;
     const hgt = 7 + ((rnd() * 5) | 0);
-    this._clear(set, lx - 1, lz - 1, 5, 5, h + 1, hgt + 3);
-    for (let dy = 0; dy <= hgt; dy++) {
+    this._clear(set, lx - 1, lz - 1, 5, 5, h + 1, hgt + 4);
+
+    // 3x3 hollow shaft. Stop one course below the deck so the hatch exit has
+    // headroom instead of trapping the player against a roof block.
+    for (let dy = 0; dy < hgt; dy++) {
       for (let dz = 0; dz < 3; dz++) {
         for (let dx = 0; dx < 3; dx++) {
           const edge = dx === 0 || dz === 0 || dx === 2 || dz === 2;
           if (!edge) { set(lx + dx, h + dy, lz + dz, B.AIR); continue; }
-          if (dy > 2 && rnd() < 0.06) continue;   // weathered gaps
+          if (dy > 2 && rnd() < 0.045) continue;
           set(lx + dx, h + dy, lz + dz, rnd() < 0.22 ? B.MOSS_STONE : stone);
         }
       }
     }
-    // interior ladder
-    for (let dy = 1; dy < hgt; dy++) set(lx + 1, h + dy, lz + 1, B.LADDER);
-    // battlement crown
-    for (let dz = -1; dz <= 3; dz++) {
-      for (let dx = -1; dx <= 3; dx++) {
-        const ring = dx === -1 || dz === -1 || dx === 3 || dz === 3;
-        if (ring) set(lx + dx, h + hgt, lz + dz, stone);
-        if (ring && (dx + dz) % 2 === 0) set(lx + dx, h + hgt + 1, lz + dz, stone);
-      }
+
+    // Guaranteed south doorway and a solid interior floor make the shaft
+    // reachable from ground level rather than sealing the useful ladder inside.
+    set(lx + 1, h, lz + 1, stone);
+    set(lx + 1, h + 1, lz + 2, B.AIR);
+    set(lx + 1, h + 2, lz + 2, B.AIR);
+
+    // A wall-mounted ladder reaches through the central hatch. The north shaft
+    // wall at z=0 supports every rung, including the final rung at deck height.
+    for (let dy = 1; dy <= hgt; dy++) set(lx + 1, h + dy, lz + 1, B.LADDER_N);
+
+    // Broad roof deck with one central hatch.
+    for (let dz = -1; dz <= 3; dz++) for (let dx = -1; dx <= 3; dx++)
+      set(lx + dx, h + hgt, lz + dz, (dx === 1 && dz === 1) ? B.LADDER_N : stone);
+    // Alternating battlements around the perimeter leave a walkable interior.
+    for (let dz = -1; dz <= 3; dz++) for (let dx = -1; dx <= 3; dx++) {
+      const ring = dx === -1 || dz === -1 || dx === 3 || dz === 3;
+      if (ring && ((dx + dz) & 1) === 0) set(lx + dx, h + hgt + 1, lz + dz, stone);
     }
-    set(lx + 1, h + hgt + 1, lz + 1, rnd() < 0.5 ? B.LANTERN : B.LUMEN);
-    if (rnd() < 0.6) set(lx + 1, h + 1, lz + 1, B.CRATE);
+
+    // Every tower now rewards the climb. The chest has clear space in front,
+    // and a small hanging lantern marks the roof at night.
+    set(lx + 2, h + hgt + 1, lz + 1, B.CRATE);
+    set(lx + 2, h + hgt + 1, lz, B.AIR);
+    set(lx, h + hgt + 1, lz + 1, B.LANTERN);
+    set(lx, h + hgt + 2, lz + 1, stone);
   }
 
   /** Abandoned campsite: fire ring, log seats, a tent of wool. */
@@ -789,8 +810,11 @@ export class WorldGen {
     // shaft
     const depth = 6 + ((rnd() * 10) | 0);
     for (let dy = 0; dy < depth; dy++) {
-      set(lx, h - dy, lz, B.AIR);
-      if (dy % 2 === 0) set(lx, h - dy, lz + 1, B.LADDER);
+      // Continuous rungs occupy the shaft itself and cling to its +Z wall.
+      // The previous every-other-block ladder sat inside the wall and could
+      // neither be climbed reliably nor rendered without popping.
+      set(lx, h - dy, lz, B.LADDER_S);
+      set(lx, h - dy, lz + 1, stone);
     }
     // roof posts
     if (rnd() < 0.6) {

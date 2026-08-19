@@ -1,4 +1,4 @@
-// VOXHAVEN - deterministic noise utilities (original implementation)
+// EVERCRAFT - deterministic noise utilities (original implementation)
 
 export function mulberry32(a) {
   return function () {

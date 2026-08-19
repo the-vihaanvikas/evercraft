@@ -1,4 +1,4 @@
-// Headless smoke test for VOXHAVEN
+// Headless smoke test for EVERCRAFT
 import puppeteer from 'puppeteer';
 
 const URL = process.env.URL || 'http://127.0.0.1:8080/';
@@ -36,14 +36,14 @@ console.log('  webgl2 available:', webgl2);
 if (!webgl2) { console.log('  (skipping run: no webgl2 in this environment)'); }
 
 console.log('→ starting world');
-await page.evaluate(() => window.__VOXHAVEN.begin({ slot: 1, name: 'Test', seed: 'testseed', load: false }));
+await page.evaluate(() => window.__EVERCRAFT.begin({ slot: 1, name: 'Test', seed: 'testseed', load: false }));
 
 // wait for loading overlay to hide
 await page.waitForFunction(() => document.querySelector('#loading').classList.contains('hidden'),
   { timeout: 90000 }).catch(() => errors.push('TIMEOUT: loading never finished'));
 
 const state = await page.evaluate(() => {
-  const g = window.__VOXHAVEN.game;
+  const g = window.__EVERCRAFT.game;
   return {
     running: g.running,
     chunks: g.world.chunks.size,
@@ -60,7 +60,7 @@ console.log('  state:', JSON.stringify(state));
 // simulate a few seconds of play + interactions
 console.log('→ simulating play');
 await page.evaluate(async () => {
-  const g = window.__VOXHAVEN.game;
+  const g = window.__EVERCRAFT.game;
   const sleep = ms => new Promise(r => setTimeout(r, ms));
   // walk
   g.keys['KeyW'] = true;
@@ -81,7 +81,7 @@ await page.evaluate(async () => {
   g.ui.open('inventory'); await sleep(120); g.ui.close();
   g.ui.open('craft'); await sleep(200);
   // craft planks if possible
-  const r = window.__VOXHAVEN.game.craftDebug;
+  const r = window.__EVERCRAFT.game.craftDebug;
   g.ui.close();
   g.ui.open('map'); await sleep(400); g.ui.close();
   g.ui.open('guide'); await sleep(120); g.ui.close();
@@ -96,7 +96,7 @@ await page.evaluate(async () => {
 });
 
 const after = await page.evaluate(() => {
-  const g = window.__VOXHAVEN.game;
+  const g = window.__EVERCRAFT.game;
   return {
     chunks: g.world.chunks.size,
     entities: g.entities.length,
@@ -106,7 +106,7 @@ const after = await page.evaluate(() => {
     health: g.player.health,
     fps: Math.round(g.fps),
     edits: Object.keys(g.world.serializeEdits()).length,
-    saveSize: (localStorage.getItem('voxhaven.save.1') || '').length,
+    saveSize: (localStorage.getItem('evercraft.save.1') || '').length,
     tris: g.renderer.info.render.triangles,
     draws: g.renderer.info.render.calls,
     pos: g.player.pos.toArray().map(v => +v.toFixed(1)),
@@ -118,16 +118,16 @@ console.log('  after play:', JSON.stringify(after));
 // reload from save
 console.log('→ testing save/load');
 await page.reload({ waitUntil: 'networkidle2' });
-await page.evaluate(() => window.__VOXHAVEN.begin({ slot: 1, load: true }));
+await page.evaluate(() => window.__EVERCRAFT.begin({ slot: 1, load: true }));
 await page.waitForFunction(() => document.querySelector('#loading').classList.contains('hidden'),
   { timeout: 90000 }).catch(() => errors.push('TIMEOUT: reload loading'));
 const loaded = await page.evaluate(() => {
-  const g = window.__VOXHAVEN.game;
+  const g = window.__EVERCRAFT.game;
   return { pos: g.player.pos.toArray().map(v => +v.toFixed(1)), mined: g.player.stats.mined, name: g.worldName };
 });
 console.log('  loaded:', JSON.stringify(loaded));
 
-await page.screenshot({ path: '/home/user/voxhaven/test/shot.png' });
+await page.screenshot({ path: '/home/user/evercraft/test/shot.png' });
 
 await browser.close();
 

@@ -1,4 +1,4 @@
-// VOXHAVEN - fully synthesized audio (WebAudio). No sample files.
+// EVERCRAFT - fully synthesized audio (WebAudio). No sample files.
 
 export class Audio {
   constructor() {

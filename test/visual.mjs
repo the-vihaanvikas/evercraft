@@ -14,12 +14,12 @@ page.on('pageerror', e => errors.push('PAGEERROR: ' + (e.stack || e.message)));
 page.on('console', m => { if (m.type() === 'error') errors.push(m.text()); });
 
 await page.goto(URL, { waitUntil: 'networkidle2', timeout: 60000 });
-await page.evaluate(() => window.__VOXHAVEN.begin({ slot: 3, name: 'Visual', seed: 'voxhaven-demo', load: false }));
+await page.evaluate(() => window.__EVERCRAFT.begin({ slot: 3, name: 'Visual', seed: 'evercraft-demo', load: false }));
 await page.waitForFunction(() => document.querySelector('#loading').classList.contains('hidden'), { timeout: 90000 });
 
 // find a scenic surface spot and stand on it
 const info = await page.evaluate(async () => {
-  const g = window.__VOXHAVEN.game;
+  const g = window.__EVERCRAFT.game;
   const sleep = ms => new Promise(r => setTimeout(r, ms));
   g.worldTime = 600 * 0.34;              // late morning
   // search loaded chunks for a high land column with trees nearby
@@ -77,34 +77,34 @@ const info = await page.evaluate(async () => {
 });
 console.log(JSON.stringify(info, null, 1));
 
-await page.screenshot({ path: '/home/user/voxhaven/test/surface.png' });
+await page.screenshot({ path: '/home/user/evercraft/test/surface.png' });
 
 // underground shot
 await page.evaluate(async () => {
-  const g = window.__VOXHAVEN.game;
+  const g = window.__EVERCRAFT.game;
   const sleep = ms => new Promise(r => setTimeout(r, ms));
   g.player.creative = true; g.player.flying = true;
   g.player.pos.y = 22; g.player.pitch = 0; g.player.yaw = 1.2;
   g.player.inv.slots[0] = { id: 'torch', count: 20 };
   await sleep(2500);
 });
-await page.screenshot({ path: '/home/user/voxhaven/test/cave.png' });
+await page.screenshot({ path: '/home/user/evercraft/test/cave.png' });
 
 // UI shots
-await page.evaluate(() => { const g = window.__VOXHAVEN.game;
+await page.evaluate(() => { const g = window.__EVERCRAFT.game;
   g.player.inv.add('log_aspen', 12); g.player.inv.add('rubble', 30); g.player.inv.add('stick', 9);
   g.player.inv.add('iron_ingot', 14); g.player.inv.add('coal', 8); g.player.inv.add('cooked_meat', 3);
   g.nearBench = true; g.ui.open('craft'); });
 await new Promise(r => setTimeout(r, 700));
-await page.screenshot({ path: '/home/user/voxhaven/test/craft.png' });
+await page.screenshot({ path: '/home/user/evercraft/test/craft.png' });
 
-await page.evaluate(() => { const g = window.__VOXHAVEN.game; g.ui.close(); g.ui.open('inventory'); });
+await page.evaluate(() => { const g = window.__EVERCRAFT.game; g.ui.close(); g.ui.open('inventory'); });
 await new Promise(r => setTimeout(r, 500));
-await page.screenshot({ path: '/home/user/voxhaven/test/inv.png' });
+await page.screenshot({ path: '/home/user/evercraft/test/inv.png' });
 
-await page.evaluate(() => { const g = window.__VOXHAVEN.game; g.ui.close(); g.ui.open('map'); });
+await page.evaluate(() => { const g = window.__EVERCRAFT.game; g.ui.close(); g.ui.open('map'); });
 await new Promise(r => setTimeout(r, 900));
-await page.screenshot({ path: '/home/user/voxhaven/test/map.png' });
+await page.screenshot({ path: '/home/user/evercraft/test/map.png' });
 
 await browser.close();
 console.log('errors:', errors.length ? errors.slice(0, 10) : 'none');

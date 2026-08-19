@@ -1,8 +1,8 @@
-// VOXHAVEN - chunk lighting + mesh building (runs inside worker).
+// EVERCRAFT - chunk lighting + mesh building (runs inside worker).
 
 import {
   B, CHUNK_X, CHUNK_Z, WORLD_H, BLOCKS, block,
-  R_SOLID, R_CUTOUT, R_CROSS, R_LIQUID, R_TORCH, R_LADDER, R_DOOR,
+  R_SOLID, R_CUTOUT, R_CROSS, R_LIQUID, R_TORCH, R_LADDER, R_DOOR, R_BED,
 } from './blocks.js';
 
 const PAD = CHUNK_X;           // one chunk of padding each side
@@ -161,16 +161,54 @@ function faceVisible(selfId, otherId) {
   const o = BLOCKS[otherId];
   if (!o) return true;
   const s = BLOCKS[selfId];
-  // Block entities (chests) are drawn as sub-cube 3D models and never emit a
-  // chunk face, so they must NOT occlude their neighbours — otherwise the
-  // blocks around a chest cull the faces pointing at it and you can see
-  // straight through the world.
+  // Block entities (chests/lanterns) are smaller than a cube and must not cull
+  // the faces of neighbouring terrain.
   if (o.blockEntity) return true;
   if (o.render === R_SOLID && !o.alpha) return false;
   if (selfId === otherId && (s.leaves || s.alpha || s.liquid)) return false;
   if (o.liquid && s.liquid) return false;
   if (o.render === R_SOLID && o.alpha) return selfId !== otherId;
   return true;
+}
+
+/** Fluid kind + surface height within its cell. */
+function liquidInfo(id) {
+  const b = BLOCKS[id];
+  if (!b || !b.liquid) return null;
+  const kind = (id === B.WATER || b.still === B.WATER) ? 'water' : 'lava';
+  const max = kind === 'water' ? 7 : 3;
+  // Sources sit one pixel below the cell top. Flowing levels descend smoothly
+  // but never become paper-thin, leaving enough side wall to close the mesh.
+  const height = b.flowing ? 0.18 + 0.695 * (b.level / max) : 0.875;
+  return { kind, height };
+}
+
+/**
+ * Height at one corner of a liquid top. Average the touching cells of the same
+ * fluid, as Minecraft does, so adjacent levels share an identical edge. A
+ * source in the sample keeps that corner high and prevents visible pinholes.
+ */
+function liquidCornerHeight(x, y, z, kind, sx, sz) {
+  const cells = [[x, z], [x + sx, z], [x, z + sz], [x + sx, z + sz]];
+  let sum = 0, n = 0, source = false;
+  for (const [cx, cz] of cells) {
+    const li = liquidInfo(padBlocks[pidx(cx, y, cz)]);
+    if (!li || li.kind !== kind) continue;
+    sum += li.height; n++;
+    if (li.height >= 0.874) source = true;
+  }
+  if (!n) return 0;
+  return source ? 0.875 : sum / n;
+}
+
+function liquidTopHeights(x, y, z, kind) {
+  // corner order matches FACES[+Y]: (0,+Z),(+X,+Z),(+X,-Z),(0,-Z)
+  return [
+    liquidCornerHeight(x, y, z, kind, -1, 1),
+    liquidCornerHeight(x, y, z, kind, 1, 1),
+    liquidCornerHeight(x, y, z, kind, 1, -1),
+    liquidCornerHeight(x, y, z, kind, -1, -1),
+  ];
 }
 
 // ----------------------------------------------------------------- lighting
@@ -391,19 +429,45 @@ export function buildChunkMesh(cx, cz, provider) {
           emitPanel(cutout, lx, y, lz, bl, bx, by, bz, rc);
           continue;
         }
-        // Block entities (chests) are drawn on the main thread as animated
+        if (rc === R_BED) {
+          emitBed(cutout, lx, y, lz, bl, bx, by, bz);
+          continue;
+        }
+        // Block entities (chests/lanterns) are drawn on the main thread as animated
         // 3D models, so the chunk mesh must not emit a cube for them.
         if (bl.blockEntity) continue;
 
         const buf = rc === R_LIQUID ? liquid : (rc === R_CUTOUT ? cutout : solid);
 
+        const selfLiquid = rc === R_LIQUID ? liquidInfo(id) : null;
+        const liquidHeights = selfLiquid ? liquidTopHeights(bx, by, bz, selfLiquid.kind) : null;
         for (let f = 0; f < 6; f++) {
           const d = FACES[f].dir;
           const nId = padBlocks[pidx(bx + d[0], by + d[1], bz + d[2])];
           if (by + d[1] < 0 || by + d[1] >= WORLD_H) {
             if (d[1] < 0) continue;
           }
-          if (!faceVisible(id, nId)) continue;
+
+          let corners = FACES[f].corners;
+          if (selfLiquid) {
+            const other = liquidInfo(nId);
+            // Same-fluid faces are internal. The corner-height averaging below
+            // guarantees both top quads meet on exactly the same edge.
+            if (other && other.kind === selfLiquid.kind) continue;
+            if (f === 2) {
+              corners = FACES[f].corners.map((c, i) => [c[0], liquidHeights[i], c[2]]);
+            } else if (f === 0) {
+              corners = [[1, liquidHeights[1], 1], [1, 0, 1], [1, 0, 0], [1, liquidHeights[2], 0]];
+            } else if (f === 1) {
+              corners = [[0, liquidHeights[3], 0], [0, 0, 0], [0, 0, 1], [0, liquidHeights[0], 1]];
+            } else if (f === 4) {
+              corners = [[0, liquidHeights[0], 1], [0, 0, 1], [1, 0, 1], [1, liquidHeights[1], 1]];
+            } else if (f === 5) {
+              corners = [[1, liquidHeights[2], 0], [1, 0, 0], [0, 0, 0], [0, liquidHeights[3], 0]];
+            }
+            // Opaque neighbours still hide a fluid side/bottom.
+            if (other === null && !faceVisible(id, nId)) continue;
+          } else if (!faceVisible(id, nId)) continue;
 
           const layer = layerFor(bl, FACES[f].key);
           const shade = FACES[f].shade;
@@ -418,17 +482,6 @@ export function buildChunkMesh(cx, cz, provider) {
           }
           aoSum0 = aos[0] + aos[2]; aoSum1 = aos[1] + aos[3];
           const flip = aoSum0 < aoSum1;
-
-          let corners = FACES[f].corners;
-          if (rc === R_LIQUID && f === 2) {
-            // Liquid tops sit below the full block, and FLOWING liquid sits
-            // lower still the weaker it gets, so a spill visibly steps down
-            // as it spreads out from its source.
-            const drop = bl.flowing
-              ? 0.12 + (1 - bl.level / (bl.still === B.WATER ? 8 : 4)) * 0.62
-              : 0.12;
-            corners = corners.map(c => [c[0], c[1] - drop, c[2]]);
-          }
           buf.quad(lx, y, lz, corners, FACES[f].uvs, layer, lts, aos, flip);
         }
       }
@@ -469,6 +522,7 @@ function emitCross(buf, x, y, z, bl, light) {
  */
 function emitTorch(buf, x, y, z, bl) {
   const layer = texIndex[bl.tex] ?? 0;
+  const headLayer = texIndex.torch_head ?? layer;
   // torches are self-lit: full block light, no sky contribution needed
   const lts = new Float32Array([1, 1, 1, 1, 1, 1, 1, 1]);
   const aoV = new Float32Array([1, 1, 1, 1]);
@@ -529,9 +583,10 @@ function emitTorch(buf, x, y, z, bl) {
     if (i === 2) return;
     buf.quad(x, y, z, c, sideUV, layer, lts, aoV, i === 3);
   });
-  // head: all six faces, bright flame texture, cap on top
+  // Head: all six faces use a dedicated fully opaque ember material. The old
+  // cutout flame silhouette left literal windows through the 3D head.
   head.forEach((c, i) => {
-    buf.quad(x, y, z, c, i === 2 || i === 3 ? capUV : headUV, layer, lts, aoV, i === 3);
+    buf.quad(x, y, z, c, i === 2 || i === 3 ? capUV : headUV, headLayer, lts, aoV, i === 3);
   });
 }
 
@@ -575,23 +630,69 @@ function emitPanel(buf, x, y, z, bl, bx, by, bz, rc) {
         [[0, 1, 1], [0, 0, 1], [0, 0, 0], [0, 1, 0]],
       ];
     }
-    // draw both sides so the ladder is visible from in front and behind
-    quads.forEach((c, i) => buf.quad(x, y, z, c, uvs, layer, lts, aoV, i === 1));
+    // One offset panel is enough because the cutout material is DoubleSide.
+    // The second panel used to sit exactly on the supporting block's face and
+    // z-fight as the camera moved slowly, producing the ladder shimmer.
+    buf.quad(x, y, z, quads[0], uvs, layer, lts, aoV, false);
     return;
   }
 
-  // doors keep the original centred slab
-  const t = 0.16;
-  const c0 = t, c1 = 1 - t;
-  const box = [
-    [[c1, 1, c1], [c1, 0, c1], [c1, 0, c0], [c1, 1, c0]],
-    [[c0, 1, c0], [c0, 0, c0], [c0, 0, c1], [c0, 1, c1]],
-    [[c0, 1, c1], [c1, 1, c1], [c1, 1, c0], [c0, 1, c0]],
-    [[c0, 0, c1], [c1, 0, c1], [c1, 0, c0], [c0, 0, c0]],
-    [[c0, 1, c1], [c0, 0, c1], [c1, 0, c1], [c1, 1, c1]],
-    [[c1, 1, c0], [c1, 0, c0], [c0, 0, c0], [c0, 1, c0]],
-  ];
+  // Thin oriented door panel. Opening rotates around a stable hinge while the
+  // blocks remain in place, so doorways never jump into an unrelated cell.
+  const t = 3 / 16;
+  let x0, x1, z0, z1;
+  const dir = bl.doorDir & 3;
+  if (!bl.open) {
+    if ((dir & 1) === 0) { x0 = 0; x1 = 1; z0 = 0.5 - t / 2; z1 = 0.5 + t / 2; }
+    else { x0 = 0.5 - t / 2; x1 = 0.5 + t / 2; z0 = 0; z1 = 1; }
+  } else if (dir === 0) { x0 = 0; x1 = t; z0 = 0; z1 = 1; }
+  else if (dir === 1) { x0 = 0; x1 = 1; z0 = 0; z1 = t; }
+  else if (dir === 2) { x0 = 1 - t; x1 = 1; z0 = 0; z1 = 1; }
+  else { x0 = 0; x1 = 1; z0 = 1 - t; z1 = 1; }
+
+  const box = boxCorners(x0, 0, z0, x1, 1, z1);
   box.forEach((c, i) => buf.quad(x, y, z, c, uvs, layer, lts, aoV, i === 3));
+}
+
+/** Six consistently wound faces for an axis-aligned local-space box. */
+function boxCorners(x0, y0, z0, x1, y1, z1) {
+  return [
+    [[x1, y1, z1], [x1, y0, z1], [x1, y0, z0], [x1, y1, z0]],
+    [[x0, y1, z0], [x0, y0, z0], [x0, y0, z1], [x0, y1, z1]],
+    [[x0, y1, z1], [x1, y1, z1], [x1, y1, z0], [x0, y1, z0]],
+    [[x0, y0, z0], [x1, y0, z0], [x1, y0, z1], [x0, y0, z1]],
+    [[x0, y1, z1], [x0, y0, z1], [x1, y0, z1], [x1, y1, z1]],
+    [[x1, y1, z0], [x1, y0, z0], [x0, y0, z0], [x0, y1, z0]],
+  ];
+}
+
+/** Low bed frame + mattress, one half per block. */
+function emitBed(buf, x, y, z, bl, bx, by, bz) {
+  const L = sampleLight(bx, by + 1, bz);
+  const sky = (L >> 4) / 15, blk = (L & 0x0f) / 15;
+  const lts = new Float32Array([sky, blk, sky, blk, sky, blk, sky, blk]);
+  const aoV = new Float32Array([0.96, 0.86, 0.86, 0.96]);
+  const uv = [[0, 1], [0, 0], [1, 0], [1, 1]];
+  const wood = texIndex.plank_aspen ?? 0;
+  const cloth = texIndex[bl.tex] ?? wood;
+  const emit = (coords, lay) => boxCorners(...coords).forEach((c, i) =>
+    buf.quad(x, y, z, c, uv, lay, lts, aoV, i === 3));
+
+  // Four short legs and a timber rail under the mattress.
+  const s = 2 / 16;
+  for (const lx of [1 / 16, 13 / 16]) for (const lz of [1 / 16, 13 / 16])
+    emit([lx, 0, lz, lx + s, 4 / 16, lz + s], wood);
+  emit([0, 3 / 16, 0, 1, 7 / 16, 1], wood);
+  emit([1 / 32, 7 / 16, 1 / 32, 31 / 32, 10 / 16, 31 / 32], cloth);
+
+  // A small raised pillow on the head half makes direction readable.
+  if (bl.bedHead) {
+    let x0 = 2 / 16, x1 = 14 / 16, z0 = 2 / 16, z1 = 7 / 16;
+    if (bl.bedDir === 1) { x0 = 9 / 16; x1 = 14 / 16; z0 = 2 / 16; z1 = 14 / 16; }
+    else if (bl.bedDir === 2) { z0 = 9 / 16; z1 = 14 / 16; }
+    else if (bl.bedDir === 3) { x0 = 2 / 16; x1 = 7 / 16; z0 = 2 / 16; z1 = 14 / 16; }
+    emit([x0, 10 / 16, z0, x1, 12 / 16, z1], texIndex.wool_white ?? cloth);
+  }
 }
 
 export { PW, PAD, pidx };

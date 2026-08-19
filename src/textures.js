@@ -1,4 +1,4 @@
-// VOXHAVEN - fully procedural pixel-art texture generation.
+// EVERCRAFT - fully procedural pixel-art texture generation.
 // Every tile & icon is drawn in code here. No external image assets.
 
 import { mulberry32, hashString } from './noise.js';
@@ -454,6 +454,11 @@ T.torch = p => {
   p.set(7, 1, '#fff3c4');
   return p;
 };
+// A fully opaque material for the six faces of the modeled torch head. Reusing
+// the cutout silhouette on a box left transparent holes through its corners.
+T.torch_head = p => p.fill('#c24f19').grain('#9f3512', '#ef7a24', .28)
+  .rect(1, 1, 14, 14, '#ff8e2f').rect(3, 2, 10, 10, '#ffc34d')
+  .blob(8, 6, 3, '#fff0a1', .25).border('#8f2f10');
 T.lantern = p => {
   p.fill('#4a4c55');
   p.rect(2, 2, 12, 12, '#6a6c75');
@@ -486,6 +491,22 @@ T.door_top = p => {
   p.line(5, 7, 10, 4, '#ffffff', 140);
   p.vline(8, 4, 7, '#5e4930');
   return p;
+};
+T.bed_foot = p => {
+  p.fill('#b43f3a').grain('#8f302d', '#d75a52', .18);
+  p.rect(0, 0, 16, 3, '#e7dfd2');
+  p.hline(3, 0, 15, '#8f302d');
+  p.rect(2, 5, 12, 8, '#c94a43');
+  p.hline(5, 2, 13, '#e2665e');
+  return p.border('#762722');
+};
+T.bed_head = p => {
+  p.fill('#b43f3a').grain('#8f302d', '#d75a52', .16);
+  p.rect(2, 1, 12, 6, '#eee8dc');
+  p.rect(3, 2, 10, 4, '#fffaf0');
+  p.hline(7, 1, 14, '#8f302d');
+  p.rect(2, 9, 12, 4, '#c94a43');
+  return p.border('#762722');
 };
 function planksDoor(p) {
   for (let x = 0; x < 16; x++) for (let y = 0; y < 16; y++) if (p.r() < .18) p.set(x, y, p.r() < .5 ? '#6f563a' : '#a8825a');
@@ -807,6 +828,54 @@ export function blockIconDataURL(key, texSpec, scale = 3) {
   drawParallelogram(ctx, side, [cx - w, oy + hh], [cx, oy + hh * 2], [cx, oy + hh * 2 + bodyH], [cx - w, oy + hh + bodyH], 0.72);
   // right face
   drawParallelogram(ctx, side, [cx, oy + hh * 2], [cx + w, oy + hh], [cx + w, oy + hh + bodyH], [cx, oy + hh * 2 + bodyH], 0.88);
+  const url = c.toDataURL();
+  _dataUrlCache.set(ck, url);
+  return url;
+}
+
+/** Inventory previews for blocks whose world model is not a full cube. */
+export function modelIconDataURL(key, model, texName, scale = 3) {
+  const ck = `model:${model}:${key}`;
+  if (_dataUrlCache.has(ck)) return _dataUrlCache.get(ck);
+  const S = 16 * scale;
+  const c = document.createElement('canvas');
+  c.width = S; c.height = S;
+  const ctx = c.getContext('2d');
+  ctx.imageSmoothingEnabled = false;
+  const tile = drawToCanvas(texName, scale);
+
+  if (model === 'cross' || model === 'ladder' || model === 'torch') {
+    // These textures already contain their alpha silhouette. Showing that
+    // silhouette is both clearer and more faithful than wrapping it on a cube.
+    const pad = model === 'torch' ? S * 0.08 : S * 0.04;
+    if (tile) ctx.drawImage(tile, pad, pad, S - pad * 2, S - pad * 2);
+  } else if (model === 'door') {
+    const top = drawToCanvas('door_top', scale), low = drawToCanvas('door_low', scale);
+    const w = S * 0.48, x = (S - w) / 2, h = S * 0.39;
+    if (top) ctx.drawImage(top, x, S * 0.08, w, h);
+    if (low) ctx.drawImage(low, x, S * 0.47, w, h);
+    ctx.fillStyle = 'rgba(0,0,0,.24)'; ctx.fillRect(x + w, S * 0.12, S * 0.07, S * 0.74);
+  } else if (model === 'lantern') {
+    const u = scale;
+    ctx.fillStyle = '#343944';
+    ctx.fillRect(7 * u, 0, 2 * u, 4 * u);
+    ctx.fillRect(4 * u, 3 * u, 8 * u, 2 * u);
+    ctx.fillStyle = '#ffbd45'; ctx.fillRect(5 * u, 5 * u, 6 * u, 7 * u);
+    ctx.fillStyle = '#fff1a6'; ctx.fillRect(6 * u, 6 * u, 4 * u, 4 * u);
+    ctx.fillStyle = '#343944';
+    ctx.fillRect(4 * u, 4 * u, u, 9 * u); ctx.fillRect(11 * u, 4 * u, u, 9 * u);
+    ctx.fillRect(4 * u, 12 * u, 8 * u, 2 * u);
+  } else if (model === 'bed') {
+    const head = drawToCanvas('bed_head', scale), foot = drawToCanvas('bed_foot', scale);
+    const topY = S * 0.20, cx = S * 0.5, w = S * 0.40, hh = S * 0.16;
+    if (head) drawParallelogram(ctx, head, [cx, topY], [cx + w, topY + hh],
+      [cx, topY + hh * 2], [cx - w, topY + hh], 1);
+    if (foot) drawParallelogram(ctx, foot, [cx, topY + hh * 1.55], [cx + w, topY + hh * 2.55],
+      [cx, topY + hh * 3.55], [cx - w, topY + hh * 2.55], 0.96);
+    ctx.fillStyle = '#6d5033';
+    ctx.fillRect(S * .12, S * .66, S * .08, S * .20);
+    ctx.fillRect(S * .80, S * .66, S * .08, S * .20);
+  }
   const url = c.toDataURL();
   _dataUrlCache.set(ck, url);
   return url;
