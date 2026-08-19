@@ -1,0 +1,140 @@
+<!DOCTYPE html>
+<html lang="en">
+<head>
+<meta charset="utf-8">
+<meta name="viewport" content="width=device-width,initial-scale=1,viewport-fit=cover">
+<title>VOXHAVEN — Voxel Survival Sandbox</title>
+<meta name="description" content="VOXHAVEN — an open-ended voxel adventure and survival sandbox. Mine, craft, build and survive in a procedurally generated world.">
+<link rel="stylesheet" href="style.css">
+<link rel="icon" href="data:image/svg+xml,<svg xmlns='http://www.w3.org/2000/svg' viewBox='0 0 32 32'><rect width='32' height='32' rx='6' fill='%23161b28'/><path d='M16 5l9 5v12l-9 5-9-5V10z' fill='%235fe0d0'/><path d='M16 5l9 5-9 5-9-5z' fill='%238ff0e4'/><path d='M16 15v12l-9-5V10z' fill='%233fa89c'/></svg>">
+</head>
+<body>
+<canvas id="gl"></canvas>
+<div id="ui"></div>
+
+<!-- ------------------------------------------------------------- title -->
+<div id="title">
+  <canvas id="titleCanvas"></canvas>
+  <div id="titleInner">
+    <h1 class="logo">VOXHAVEN<em>VOXEL SURVIVAL SANDBOX</em></h1>
+    <div class="splash" id="splash">Dig deeper!</div>
+    <p class="tagline">Carve a home out of an endless world.<br>Mine deep, build tall, survive the dark.</p>
+
+    <div class="menu-card">
+      <div class="tabs">
+        <button id="tabNew" class="on">New World</button>
+        <button id="tabLoad">Continue</button>
+        <button id="tabHelp">How to Play</button>
+      </div>
+
+      <div id="paneNew">
+        <div class="field">
+          <label>Game mode</label>
+          <div class="mode-grid" id="modePick">
+            <button class="mode-card on" data-mode="survival">
+              <svg class="mi" viewBox="0 0 16 16" shape-rendering="crispEdges" aria-hidden="true">
+                <rect width="16" height="16" fill="#2b3444"/>
+                <path d="M3 6h2v1h1v1h1V7h1V6h2v1h1v2h-1v1h-1v1h-1v1H8v1H7v-1H6v-1H5v-1H4V9H3z" fill="#e05a5a"/>
+                <path d="M4 6h1v1H4z" fill="#ff9a9a"/>
+              </svg>
+              <div>
+                <b>Survival</b>
+                <span>Health, hunger and hostiles. Gather resources and earn every upgrade.</span>
+              </div>
+            </button>
+            <button class="mode-card" data-mode="creative">
+              <svg class="mi" viewBox="0 0 16 16" shape-rendering="crispEdges" aria-hidden="true">
+                <rect width="16" height="16" fill="#2b3444"/>
+                <path d="M2 8h3V6h2V4h2v2h2v2h3l-4 4H6z" fill="#7fd0f5"/>
+                <path d="M7 4h2v2H7z" fill="#d8f2ff"/>
+              </svg>
+              <div>
+                <b>Creative</b>
+                <span>Fly, unlimited blocks, no damage. Pure building freedom.</span>
+              </div>
+            </button>
+          </div>
+        </div>
+
+        <div class="row2">
+          <div class="field">
+            <label for="wname">World name</label>
+            <input id="wname" value="Haven" maxlength="24" autocomplete="off">
+          </div>
+          <div class="field">
+            <label for="wseed">Seed (blank = random)</label>
+            <input id="wseed" placeholder="e.g. emberfall" maxlength="24" autocomplete="off">
+          </div>
+        </div>
+        <div class="field">
+          <label>Save slot</label>
+          <div class="tabs" id="slotPick">
+            <button data-slot="1" class="on">Slot 1</button>
+            <button data-slot="2">Slot 2</button>
+            <button data-slot="3">Slot 3</button>
+          </div>
+        </div>
+        <button id="btnCreate" class="bigbtn">Begin Expedition</button>
+      </div>
+
+      <div id="paneLoad" style="display:none">
+        <div id="saveList"></div>
+      </div>
+
+      <div id="paneHelp" style="display:none;text-align:left">
+        <div class="guide" style="columns:2;font-size:12.5px">
+          <section>
+            <h3>Goal</h3>
+            <p>There is no fixed ending — gather resources, master every tool tier and build whatever
+            you imagine. Nightfall brings hostiles, so light your home well.</p>
+          </section>
+          <section>
+            <h3>Controls</h3>
+            <div class="keys">
+              <div><kbd>W A S D</kbd> move</div><div><kbd>Space</kbd> jump</div>
+              <div><kbd>Shift</kbd> sneak</div><div><kbd>Ctrl</kbd> sprint</div>
+              <div><kbd>LMB</kbd> mine / hit</div><div><kbd>RMB</kbd> place / use</div>
+              <div><kbd>1–9</kbd> hotbar</div><div><kbd>Wheel</kbd> cycle</div>
+              <div><kbd>E</kbd> satchel</div><div><kbd>C</kbd> crafting</div>
+              <div><kbd>M</kbd> map</div><div><kbd>G</kbd> guide</div>
+              <div><kbd>F</kbd> eat</div><div><kbd>Q</kbd> drop</div>
+              <div><kbd>F5</kbd> camera</div><div><kbd>Esc</kbd> menu</div>
+            </div>
+          </section>
+          <section>
+            <h3>First Steps</h3>
+            <ol>
+              <li>Punch trees → <b>Planks</b> → <b>Sticks</b>.</li>
+              <li>Craft an <b>Crafting Table</b> and place it.</li>
+              <li>Timber pick → stone → copper → iron → <b>Aurorite</b>.</li>
+              <li>Make torches before dusk.</li>
+            </ol>
+          </section>
+          <section>
+            <h3>Controller</h3>
+            <p>Plug in a gamepad any time — sticks move and look, <b>RT</b> mines, <b>LT</b> places,
+            <b>A</b> jumps, <b>Y</b> opens the satchel, bumpers cycle the hotbar.</p>
+          </section>
+        </div>
+      </div>
+
+      <div class="credits">
+        <b>VOXHAVEN</b> — an original voxel sandbox. All artwork, creatures, sounds, music and interface
+        are generated procedurally from code in this project; no third-party game assets are used.<br>
+        Built with WebGL. Worlds save to your browser's local storage.
+      </div>
+    </div>
+  </div>
+</div>
+
+<!-- ----------------------------------------------------------- loading -->
+<div id="loading" class="hidden">
+  <div class="loadlogo">VOXHAVEN</div>
+  <div class="loadbar"><i id="loadFill"></i></div>
+  <div class="loadtip" id="loadTip">Shaping the world…</div>
+</div>
+
+<script type="module" src="src/main.js"></script>
+<noscript><p style="color:#fff;padding:40px">VOXHAVEN requires JavaScript and WebGL2.</p></noscript>
+</body>
+</html>
