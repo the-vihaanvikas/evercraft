@@ -4,8 +4,7 @@ import * as THREE from '../vendor/three.module.js';
 import {
   B, BLOCKS, block, isSolid, ITEM, itemDef, itemName, miningTime, canHarvest,
   blockDrop, itemIdForBlock, CHUNK_X, CHUNK_Z, WORLD_H, SEA_LEVEL, ARMOR_SLOTS,
-  LADDER_DIR, TORCH_DIR, BED_FOOT_DIR, BED_HEAD_DIR,
-  DOOR_CLOSED_LOW, DOOR_CLOSED_TOP, DOOR_OPEN_LOW, DOOR_OPEN_TOP,
+  LADDER_DIR, TORCH_DIR, BED_FOOT_DIR, BED_HEAD_DIR, DOOR_SETS,
 } from './blocks.js';
 import { World, ckey } from './world.js';
 import { Player, raycast, matOf, HOTBAR, INV_SIZE, mkStack, stackMax } from './player.js';
@@ -68,6 +67,7 @@ export class Game {
     this.entities = [];
     this.spawnTimer = 0;
     this.hurtTint = 0;
+    this.sleep = null;        // active sleep cinematic state, if any
     this._initGraphics();
     this.audio = new Audio();
     this.ui = new UI(this);
@@ -116,11 +116,15 @@ export class Game {
     this.entityGroup = new THREE.Group();
     this.scene.add(this.entityGroup);
 
-    // held item view model
+    // held item view models: right hand (main) and left hand (off hand)
     this.handGroup = new THREE.Group();
     this.camera.add(this.handGroup);
+    this.offhandGroup = new THREE.Group();
+    this.camera.add(this.offhandGroup);
     this.scene.add(this.camera);
     this._handMesh = null;
+    this._offhandMesh = null;
+    this._offhandId = undefined;
 
     window.addEventListener('resize', () => this._onResize());
   }
@@ -200,6 +204,7 @@ export class Game {
 
     this.canvas.addEventListener('mousedown', (e) => {
       if (!this.running) return;
+      if (this.sleep) return;                    // interaction is paused
       if (!this.pointerLocked && !this.ui.isOpen()) { this.requestPointerLock(); return; }
       if (e.button === 0) this.mouse.left = true;
       if (e.button === 2) { this.mouse.right = true; this._useAction(); }
@@ -217,7 +222,8 @@ export class Game {
       // while entering pointer lock. Dropping that first packet prevents the
       // rare seemingly random 90/180-degree view jump.
       if (this.pointerLocked) this._ignoreMouseMoveUntil = performance.now() + 55;
-      if (!this.pointerLocked && this.running && !this.ui.isOpen() && !this.player?.dead) {
+      if (!this.pointerLocked && this.running && !this.ui.isOpen() && !this.sleep &&
+        !this.player?.dead) {
         this.ui.open('pause');
       }
     });
@@ -266,6 +272,14 @@ export class Game {
     if (!p) return;
     const ui = this.ui;
 
+    // The sleep cinematic owns the screen: Escape (or Space) skips to the end,
+    // every other key is swallowed so nothing can be mined, placed or opened.
+    if (this.sleep) {
+      e.preventDefault();
+      if (k === 'Escape' || k === 'Space' || k === 'KeyE') this._endSleep(true);
+      return;
+    }
+
     if (k === 'Escape') {
       e.preventDefault();
       if (ui.isOpen()) { ui.close(); this.requestPointerLock(); }
@@ -292,6 +306,12 @@ export class Game {
       case 'KeyM': ui.open('map'); document.exitPointerLock(); break;
       case 'KeyG': ui.open('guide'); document.exitPointerLock(); break;
       case 'KeyF': this._eatHeld(); break;
+      case 'KeyX':
+        // swap the main hand and the off hand
+        p.swapHands();
+        this.audio.click();
+        this.ui.toast(p.offhand ? `Off hand: <b>${itemName(p.offhand.id)}</b>` : 'Off hand empty');
+        break;
       case 'KeyQ': this._dropHeld(e.shiftKey); break;
       case 'F3': e.preventDefault(); this.showDebug = !this.showDebug; break;
       case 'F5':
@@ -323,7 +343,7 @@ export class Game {
 
   _pollInput() {
     const K = this.keys, inp = this.input, p = this.player;
-    const blocked = this.ui.isOpen() || p.dead;
+    const blocked = this.ui.isOpen() || p.dead || !!this.sleep;
     inp.forward = !blocked && (K['KeyW'] || K['ArrowUp']) ? 1 : 0;
     inp.back = !blocked && (K['KeyS'] || K['ArrowDown']) ? 1 : 0;
     inp.left = !blocked && (K['KeyA'] || K['ArrowLeft']) ? 1 : 0;
@@ -383,7 +403,7 @@ export class Game {
   }
 
   requestPointerLock() {
-    if (this.ui.isOpen()) return;
+    if (this.ui.isOpen() || this.sleep) return;
     if (this.canvas.requestPointerLock) {
       const r = this.canvas.requestPointerLock();
       if (r && r.catch) r.catch(() => { });
@@ -481,17 +501,27 @@ export class Game {
     this.fpsAcc += dt; this.fpsCount++;
     if (this.fpsAcc > 0.5) { this.fps = this.fpsCount / this.fpsAcc; this.fpsAcc = 0; this.fpsCount = 0; }
 
-    const active = !this.ui.isOpen() || this.ui.screen === 'inventory' || this.ui.screen === 'craft'
-      || this.ui.screen === 'crate' || this.ui.screen === 'smelter';
+    const sleeping = !!this.sleep;
+    const active = (!this.ui.isOpen() || this.ui.screen === 'inventory' || this.ui.screen === 'craft'
+      || this.ui.screen === 'crate' || this.ui.screen === 'smelter') && !sleeping;
 
+    // While the sleep cinematic runs, time is driven by the cinematic itself.
     if (active) this.worldTime += dt;
     this._pollInput();
+    if (sleeping) this._updateSleep(dt);
 
     if (!this.player.dead) {
       this.player.update(active ? dt : 0, this.input);
     }
 
     this.world.update(this.player.pos.x, this.player.pos.z);
+
+    if (sleeping) {
+      // the world keeps breathing around the sleeper, but nothing the player
+      // does can touch it
+      this._updateEntities(dt);
+      this.particles.update(dt, this.world);
+    }
 
     if (active) {
       this._updateMining(dt);
@@ -699,6 +729,11 @@ export class Game {
       legL, legR, bootL, bootR, eyeL, eyeR);
     g.userData = { arms: [armL, armR], legs: [legL, legR], hands: [handL, handR],
       head, hair, eyes: [eyeL, eyeR], shoulderY, TORSO, hipY };
+    // YXZ: yaw first, then pitch about the avatar's OWN right axis. With the
+    // default XYZ order the swim pitch was applied about the world X axis, so
+    // facing east or west made the avatar roll onto its side instead of lying
+    // face-down along its heading.
+    g.rotation.order = 'YXZ';
     this.scene.add(g);
     return g;
   }
@@ -706,17 +741,20 @@ export class Game {
   /** Animate + place the third-person avatar; hidden in first person. */
   _updateAvatar(dt) {
     const p = this.player;
-    const show = this.cameraMode !== 0;
+    const show = this.cameraMode !== 0 && !this.sleep;
     if (!show) { if (this.avatar) this.avatar.visible = false; return; }
     if (!this.avatar) this.avatar = this._buildAvatar();
     const a = this.avatar, ud = a.userData;
     a.visible = true;
+    a.rotation.order = 'YXZ';
+    a.rotation.z = 0;
     a.rotation.y = p.yaw;
-    const swimTarget = p.swimming ? 1 : 0;
+    const swimTarget = p.swimPose ? 1 : 0;
     this._avSwim = (this._avSwim || 0) + (swimTarget - (this._avSwim || 0)) *
       (1 - Math.exp(-7 * dt));
-    a.rotation.x = -1.36 * this._avSwim;
-    a.position.set(p.pos.x, p.pos.y + this._avSwim * 0.68, p.pos.z);
+    // pitch forward into a prone position about the avatar's own right axis
+    a.rotation.x = -1.34 * this._avSwim;
+    a.position.set(p.pos.x, p.pos.y + this._avSwim * 0.70, p.pos.z);
 
     const speed = Math.hypot(p.vel.x, p.vel.z);
     const moving = speed > 0.25;
@@ -746,23 +784,36 @@ export class Game {
       ud.arms[0].rotation.x = 1.15; ud.arms[1].rotation.x = 1.15;
       ud.legs[0].rotation.x = -0.25; ud.legs[1].rotation.x = -0.18;
     }
-    // Sprint-swimming: lay the whole avatar into the water and use a broad,
-    // alternating crawl visible from both rear and front third-person views.
+    // Sprint-swimming: the body is already prone, so the stroke is a proper
+    // front crawl - both arms windmill forward over the head half a cycle
+    // apart, and the legs flutter-kick at double the arm rate. The phase is
+    // time-based so it keeps a steady cadence instead of stuttering with the
+    // ground gait counter.
     if (this._avSwim > 0.02) {
-      const crawl = Math.sin(this._avGait * 0.72);
+      this._avSwimPhase = (this._avSwimPhase || 0) + dt * (4.6 + Math.min(speed, 8) * 0.35);
+      const ph = this._avSwimPhase;
       const sAmp = this._avSwim;
-      ud.arms[0].rotation.x = (-1.0 + crawl * 1.05) * sAmp;
-      ud.arms[1].rotation.x = (-1.0 - crawl * 1.05) * sAmp;
-      ud.arms[0].rotation.z = 0.24 * crawl * sAmp;
-      ud.arms[1].rotation.z = -0.24 * crawl * sAmp;
-      ud.legs[0].rotation.x = crawl * 0.22 * sAmp;
-      ud.legs[1].rotation.x = -crawl * 0.22 * sAmp;
+      // arms rotate through a full circle: reach ahead (~-2.4 rad) and pull
+      // back past the hip, mirrored between left and right
+      ud.arms[0].rotation.x = (-1.15 - Math.cos(ph) * 1.25) * sAmp;
+      ud.arms[1].rotation.x = (-1.15 - Math.cos(ph + Math.PI) * 1.25) * sAmp;
+      ud.arms[0].rotation.z = (0.10 + Math.sin(ph) * 0.16) * sAmp;
+      ud.arms[1].rotation.z = (-0.10 - Math.sin(ph + Math.PI) * 0.16) * sAmp;
+      ud.legs[0].rotation.x = Math.sin(ph * 2) * 0.34 * sAmp;
+      ud.legs[1].rotation.x = -Math.sin(ph * 2) * 0.34 * sAmp;
+      // head lifts a little out of the water on every other stroke
+      ud.head.rotation.x = (-0.55 + Math.sin(ph) * 0.18) * sAmp + (-p.pitch * 0.75) * (1 - sAmp);
+      ud.hair.rotation.x = ud.head.rotation.x;
     } else {
+      this._avSwimPhase = 0;
       ud.arms[0].rotation.z = 0;
     }
-    // head follows pitch so the avatar looks where the player looks
-    ud.head.rotation.x = -p.pitch * 0.75;
-    ud.hair.rotation.x = -p.pitch * 0.75;
+    // head follows pitch so the avatar looks where the player looks (the swim
+    // pose above already set its own head angle)
+    if (this._avSwim <= 0.02) {
+      ud.head.rotation.x = -p.pitch * 0.75;
+      ud.hair.rotation.x = -p.pitch * 0.75;
+    }
     // hands ride with the arms
     const hy = ud.shoulderY - ud.TORSO;
     ud.hands.forEach((h, i) => {
@@ -772,7 +823,7 @@ export class Game {
       h.rotation.x = rx;
     });
     // sneak crouch (blended swim height was applied above)
-    a.position.y = p.pos.y + this._avSwim * 0.68 - (p.sneaking ? 0.14 : 0);
+    a.position.y = p.pos.y + this._avSwim * 0.70 - (p.sneaking ? 0.14 : 0);
   }
 
   /**
@@ -805,6 +856,19 @@ export class Game {
 
   _updateCamera(dt) {
     const p = this.player;
+    // The sleep cinematic drives the camera directly.
+    if (this.sleep && this._sleepCam) {
+      const c = this._sleepCam;
+      this.camera.position.copy(c.pos);
+      this.camera.rotation.set(0, 0, 0, 'YXZ');
+      this.camera.rotation.y = c.yaw;
+      this.camera.rotation.x = c.pitch;
+      this.camera.fov += (this.fov - this.camera.fov) * Math.min(1, dt * 6);
+      this.camera.updateProjectionMatrix();
+      this.handGroup.visible = false;
+      if (this.offhandGroup) this.offhandGroup.visible = false;
+      return;
+    }
     const eye = p.eyePos();
     // Smooth view bob. The old abs(sin) waveform had a mathematical cusp at
     // every footfall and snapped instantly between walking/sprinting amplitudes.
@@ -881,10 +945,37 @@ export class Game {
       this._handMesh = this._makeHandMesh(id);
       if (this._handMesh) this.handGroup.add(this._handMesh);
     }
+
+    // ---- off hand: only ever drawn when it actually holds something, plus
+    // while swimming, where the left arm is needed for the stroke.
+    const offId = p.offhandId;
+    if (this._offhandId !== offId) {
+      this._offhandId = offId;
+      if (this._offhandMesh) { this.offhandGroup.remove(this._offhandMesh); this._offhandMesh = null; }
+      this._offhandMesh = this._makeHandMesh(offId, true);
+      if (this._offhandMesh) this.offhandGroup.add(this._offhandMesh);
+    }
+    const swimming = p.swimPose;
+    this.offhandGroup.visible = this.cameraMode === 0 && !this.sleep &&
+      (!!offId || swimming);
+
     if (!this._handMesh) return;
     const sw = Math.max(0, p.swingT);
     const s = Math.sin(sw * Math.PI);
     const m = this._handMesh;
+    const om = this._offhandMesh;
+
+    if (swimming) {
+      // Front crawl. BOTH arms work: they reach forward over the head, sweep
+      // down past the chest and recover, half a cycle apart. Previously only
+      // the right arm waved from side to side, which read as flailing.
+      this._swimPhase = (this._swimPhase || 0) + dt * 5.4;
+      this._poseSwimArm(m, this._swimPhase, 1);
+      if (om) this._poseSwimArm(om, this._swimPhase + Math.PI, -1);
+      return;
+    }
+    this._swimPhase = 0;
+
     const bobY = Math.sin(p.bobPhase * 3.1) * 0.008 * (p.onGround ? 1 : 0);
     const bobX = Math.sin(p.bobPhase * 1.55) * 0.009 * (p.onGround ? 1 : 0);
     // Keep the view model attached to the lower-right edge. An empty arm gets
@@ -894,13 +985,33 @@ export class Game {
     const ex = empty ? 0.09 : 0, ey = empty ? -0.055 : 0, ez = empty ? 0.035 : 0;
     m.position.set(0.34 + ex + bobX - s * 0.06, -0.33 + ey + bobY - s * 0.10, -0.62 + ez + s * 0.14);
     m.rotation.set(-0.24 - s * 1.35, 0.40 + s * 0.28, 0.14 + s * 0.3);
-    if (p.swimming) {
-      const crawl = Math.sin(this.time * 5.2);
-      m.position.x += crawl * 0.055;
-      m.position.y += Math.cos(this.time * 5.2) * 0.04;
-      m.rotation.x = -0.72 + crawl * 0.62;
-      m.rotation.z = 0.30 - crawl * 0.20;
+
+    if (om) {
+      // Mirror of the resting main-hand pose, with a gentle idle sway.
+      const oe = !offId;
+      const oex = oe ? 0.09 : 0, oey = oe ? -0.055 : 0, oez = oe ? 0.035 : 0;
+      om.position.set(-(0.34 + oex) - bobX, -0.33 + oey + bobY, -0.62 + oez);
+      om.rotation.set(-0.24, -(0.40), -0.14);
     }
+  }
+
+  /**
+   * Pose one first-person arm on the swim stroke.
+   * @param {THREE.Object3D} m   the arm / held-item group
+   * @param {number} phase       stroke phase in radians
+   * @param {number} side        +1 right hand, -1 left hand
+   */
+  _poseSwimArm(m, phase, side) {
+    const reach = Math.sin(phase);        // +1 fully extended ahead
+    const lift = Math.cos(phase);         // +1 top of the recovery arc
+    m.position.set(
+      side * (0.27 + Math.max(0, -reach) * 0.05),
+      -0.30 + reach * 0.13 + lift * 0.05,
+      -0.60 - Math.max(0, reach) * 0.24);
+    m.rotation.set(
+      -0.45 - reach * 1.00,
+      side * (0.26 - reach * 0.18),
+      side * (0.10 + lift * 0.12));
   }
 
   /**
@@ -925,9 +1036,13 @@ export class Game {
     return g;
   }
 
-  _makeHandMesh(id) {
+  _makeHandMesh(id, mirrored = false) {
     const def = id ? itemDef(id) : null;
-    if (!id) return this._makeArm();     // empty hand: show the arm itself
+    if (!id) {
+      const arm = this._makeArm();       // empty hand: show the arm itself
+      if (mirrored) arm.children.forEach(c => { c.position.x = -c.position.x; });
+      return arm;
+    }
     if (def && def.block) {
       // held block, with the arm visible behind it
       const grp = new THREE.Group();
@@ -1006,7 +1121,7 @@ export class Game {
 
   _updateMining(dt) {
     const p = this.player;
-    if (p.dead || this.ui.isOpen()) { this._cancelMining(); return; }
+    if (p.dead || this.ui.isOpen() || this.sleep) { this._cancelMining(); return; }
 
     const { hit } = this._target();
 
@@ -1105,7 +1220,9 @@ export class Game {
       const lowY = original.doorTop ? y - 1 : y;
       this.world.setBlock(x, original.doorTop ? y - 1 : y + 1, z, 0);
       if (original.doorTop) this.world.setBlock(x, y, z, 0);
-      y = lowY; id = B.DOOR_LOW;
+      y = lowY;
+      // resolve drops against this wood's canonical closed lower half
+      id = (DOOR_SETS[original.doorWood] || DOOR_SETS.aspen).closedLow[0];
     }
     // Beds: remove the other horizontal half and drop one canonical bed.
     if (original && original.bed) {
@@ -1164,7 +1281,7 @@ export class Game {
   // ----------------------------------------------------------------- placing
   _useAction() {
     const p = this.player;
-    if (p.dead || this.ui.isOpen()) return;
+    if (p.dead || this.ui.isOpen() || this.sleep) return;
     const { hit } = this._target();
     p.swingT = 1;
 
@@ -1177,20 +1294,33 @@ export class Game {
       }
     }
 
-    // 2) shear woolback
+    // Right-click prefers the main hand and falls back to the off hand, so a
+    // torch or a stack of blocks parked in the left hand is usable without
+    // swapping it into the quick bar first.
+    const usable = (st) => { const d = st && itemDef(st.id); return !!d && (!!d.block || !!d.food); };
+    let held = null, heldSlot = p.hotbarIdx;
+    if (usable(p.held)) { held = p.held; heldSlot = p.hotbarIdx; }
+    else if (usable(p.offhand)) { held = p.offhand; heldSlot = 'offhand'; }
+    else { held = p.held || p.offhand || null; heldSlot = p.held ? p.hotbarIdx : 'offhand'; }
+
+    // 2) shear woolback (either hand may hold the shears)
     const ent = this._targetEntity(3.2);
-    const held = p.held;
-    if (ent && held && itemDef(held.id)?.tool === 'shears' && ent.def.shearable && !ent.sheared) {
+    const shears = [p.held, p.offhand].find(st => st && itemDef(st.id)?.tool === 'shears');
+    if (ent && shears && ent.def.shearable && !ent.sheared) {
       ent.sheared = true;
       this.itemDrops.spawn(ent.pos.x, ent.pos.y + 0.6, ent.pos.z, ent.def.shearable, 1 + ((Math.random() * 2) | 0));
       if (ent.mesh.userData.wool) ent.mesh.userData.wool.forEach(w => w.material = w.material.clone());
       if (ent.mesh.userData.wool) ent.mesh.userData.wool.forEach(w => w.material.color.setHex(0xd8c2a0));
-      p.damageHeld(1);
+      if (shears === p.held) p.damageHeld(1);
+      else if (shears.dur !== undefined && !p.creative) {
+        shears.dur -= 1;
+        if (shears.dur <= 0) { p.offhand = null; this.audio.break_('metal'); }
+      }
       this.audio.break_('wool');
       return;
     }
     // 3) feed / eat
-    if (held && itemDef(held.id)?.food) { this._eatHeld(); return; }
+    if (held && itemDef(held.id)?.food) { this._eatHeld(heldSlot); return; }
 
     // 4) place block
     if (!held) return;
@@ -1240,7 +1370,8 @@ export class Game {
     const yawQ = ((Math.round(p.yaw / (Math.PI / 2)) % 4) + 4) % 4;
     const facing = [0, 3, 2, 1][yawQ];
     let secondBlock = null;
-    if (placeId === B.DOOR_LOW) placeId = DOOR_CLOSED_LOW[facing];
+    const placeDoor = BLOCKS[placeId];
+    if (placeDoor && placeDoor.door) placeId = DOOR_SETS[placeDoor.doorWood].closedLow[facing];
     if (placeId === B.BED_FOOT_N) {
       const dirs = [[0, -1], [1, 0], [0, 1], [-1, 0]];
       const [dx, dz] = dirs[facing];
@@ -1304,7 +1435,7 @@ export class Game {
 
     if (!this.world.setBlock(bx, by, bz, placeId)) return;
     if (placeBl.door && !placeBl.doorTop)
-      this.world.setBlock(bx, by + 1, bz, DOOR_CLOSED_TOP[placeBl.doorDir]);
+      this.world.setBlock(bx, by + 1, bz, DOOR_SETS[placeBl.doorWood].closedTop[placeBl.doorDir]);
     if (secondBlock) this.world.setBlock(secondBlock.x, secondBlock.y, secondBlock.z, secondBlock.id);
     if (placeId === B.TALL_GRASS && this.world.getBlock(bx, by + 1, bz) === 0)
       this.world.setBlock(bx, by + 1, bz, B.TALL_GRASS_TOP);
@@ -1321,10 +1452,7 @@ export class Game {
     this.audio.place(matOf(placeId));
     this.particles.burst(bx + 0.5, by + 0.2, bz + 0.5, blockColor(placeId), 5, 1.2, 0.06, 0.4);
     p.stats.placed++;
-    if (!p.creative) {
-      held.count--;
-      if (held.count <= 0) p.inv.slots[p.hotbarIdx] = null;
-    }
+    if (!p.creative) p.consumeSlot(heldSlot, 1);
   }
 
   _interact(hit, bl) {
@@ -1369,8 +1497,9 @@ export class Game {
     const lowY = bl.doorTop ? y - 1 : y;
     const dir = bl.doorDir & 3;
     const opening = !bl.open;
-    this.world.setBlock(x, lowY, z, (opening ? DOOR_OPEN_LOW : DOOR_CLOSED_LOW)[dir]);
-    this.world.setBlock(x, lowY + 1, z, (opening ? DOOR_OPEN_TOP : DOOR_CLOSED_TOP)[dir]);
+    const set = DOOR_SETS[bl.doorWood] || DOOR_SETS.aspen;
+    this.world.setBlock(x, lowY, z, (opening ? set.openLow : set.closedLow)[dir]);
+    this.world.setBlock(x, lowY + 1, z, (opening ? set.openTop : set.closedTop)[dir]);
     this.audio.door(opening);
   }
 
@@ -1410,22 +1539,174 @@ export class Game {
       return;
     }
 
-    // Advance to the next 07:12 morning and clear exposed night creatures. Any
-    // hostile under a roof/cave remains, matching normal daylight behaviour.
+    this._beginSleep(headX, headZ, y, bl);
+  }
+
+  // ------------------------------------------------------------------ sleep
+  /**
+   * Staged sleep cinematic.
+   *
+   * Sleeping is not an instant time-skip: the camera lies down on the pillow,
+   * the eyelids close, the world fast-forwards through the small hours while
+   * the player heals, and the eyes reopen slowly onto the actual sunrise
+   * before the player stands up again. Every stage runs off `this.sleep`, and
+   * while it exists all player input, mining, placing and menus are paused.
+   */
+  _beginSleep(headX, headZ, y, bl) {
+    if (this.sleep) return;
+    const p = this.player;
+    const dirs = [[0, -1], [1, 0], [0, 1], [-1, 0]];
+    const [dx, dz] = dirs[bl.bedDir & 3];
+    // lie facing along the bed (head -> foot) and looking up at the ceiling
+    const lookYaw = Math.atan2(dx, dz);
+    const eye = p.eyePos();
+
+    // Fast-forward target: the next 07:12 morning. We stop just short of dawn
+    // while the eyes are shut so the sunrise itself plays out on screen.
+    const t = this.dayFraction();
     const day = Math.floor(this.worldTime / DAY_LENGTH);
-    this.worldTime = (day + (t >= 0.30 ? 1 : 0)) * DAY_LENGTH + DAY_LENGTH * 0.30;
+    const targetDay = day + (t >= 0.30 ? 1 : 0);
+    this.sleep = {
+      stage: 0, t: 0,
+      camFrom: eye.clone(),
+      camTo: new THREE.Vector3(headX + 0.5 - dx * 0.18, y + 0.72, headZ + 0.5 - dz * 0.18),
+      standTo: null,
+      yawFrom: p.yaw, yawTo: lookYaw,
+      pitchFrom: p.pitch, pitchTo: 0.92,
+      timeFrom: this.worldTime,
+      preDawn: targetDay * DAY_LENGTH + DAY_LENGTH * 0.215,
+      morning: targetDay * DAY_LENGTH + DAY_LENGTH * 0.30,
+      healFrom: p.health,
+      lid: 0,
+      done: false,
+    };
+    p.vel.set(0, 0, 0);
+    p.mining = null;
+    p.sprinting = false;
+    this.mouse.left = false; this.mouse.right = false;
+    this._cancelMining();
+    this.ui.hint('');
+    if (this.ui.isOpen()) this.ui.close();
+    document.exitPointerLock();
+    this.ui.beginSleep();
+    this.audio.sleep ? this.audio.sleep() : this.audio.click();
+  }
+
+  /** Duration of each cinematic stage, in seconds. */
+  static get SLEEP_STAGES() {
+    return [
+      { key: 'lie', dur: 1.25, cap: 'You lie down\u2026' },
+      { key: 'close', dur: 0.95, cap: 'Closing your eyes\u2026' },
+      { key: 'rest', dur: 2.60, cap: 'Sleeping\u2026' },
+      { key: 'wake', dur: 1.70, cap: 'Sunrise\u2026' },
+      { key: 'rise', dur: 1.10, cap: 'Good morning' },
+    ];
+  }
+
+  get sleeping() { return !!this.sleep; }
+
+  _updateSleep(dt) {
+    const sl = this.sleep;
+    if (!sl) return;
+    const p = this.player;
+    const stages = Game.SLEEP_STAGES;
+    sl.t += dt;
+    let st = stages[sl.stage];
+    while (sl.t >= st.dur) {
+      sl.t -= st.dur;
+      sl.stage++;
+      if (sl.stage >= stages.length) { this._endSleep(); return; }
+      st = stages[sl.stage];
+      if (st.key === 'rise') sl.standTo = p.eyePos().clone();
+    }
+    const f = Math.min(1, sl.t / st.dur);
+    const ease = f * f * (3 - 2 * f);
+
+    // ---- camera: lie down, hold, then sit back up
+    const cam = this._sleepCam || (this._sleepCam = {
+      pos: new THREE.Vector3(), yaw: 0, pitch: 0,
+    });
+    const drift = Math.sin(this.time * 0.7) * 0.012;
+    if (st.key === 'lie') {
+      cam.pos.copy(sl.camFrom).lerp(sl.camTo, ease);
+      cam.yaw = sl.yawFrom + shortestAngle(sl.yawFrom, sl.yawTo) * ease;
+      cam.pitch = sl.pitchFrom + (sl.pitchTo - sl.pitchFrom) * ease;
+    } else if (st.key === 'rise') {
+      const up = sl.standTo || sl.camFrom;
+      cam.pos.copy(sl.camTo).lerp(up, ease);
+      cam.yaw = sl.yawTo;
+      cam.pitch = sl.pitchTo + (0.06 - sl.pitchTo) * ease;
+    } else {
+      cam.pos.copy(sl.camTo);
+      cam.pos.y += drift;
+      cam.yaw = sl.yawTo + drift * 0.6;
+      cam.pitch = sl.pitchTo + drift;
+    }
+
+    // ---- eyelids
+    let lid = sl.lid;
+    if (st.key === 'lie') lid = 0.10 * ease;
+    else if (st.key === 'close') lid = 0.10 + 0.90 * ease;
+    else if (st.key === 'rest') lid = 1;
+    else if (st.key === 'wake') lid = 1 - 0.86 * ease;
+    else lid = 0.14 * (1 - ease);
+    sl.lid = lid;
+
+    // ---- time: hold until the eyes are shut, race through the night, then
+    // let the sunrise play at a watchable pace while the eyes reopen.
+    if (st.key === 'rest') {
+      this.worldTime = sl.timeFrom + (sl.preDawn - sl.timeFrom) * ease;
+    } else if (st.key === 'wake' || st.key === 'rise') {
+      // The sunrise itself: most of it plays while the eyelids lift, the
+      // remainder as the player sits back up.
+      const pgs = st.key === 'wake' ? ease * 0.72 : 0.72 + ease * 0.28;
+      this.worldTime = sl.preDawn + (sl.morning - sl.preDawn) * pgs;
+    }
+
+    // ---- healing: a full night's rest mends you while you are under
+    if (st.key === 'rest' || st.key === 'wake') {
+      p.health = Math.min(p.maxHealth, p.health + dt * 2.4);
+      p.air = p.maxAir;
+      p.exhaustion = Math.max(0, p.exhaustion - dt * 0.8);
+      if (p.hurtCd > 0) p.hurtCd = 0;
+    }
+
+    // ---- daybreak: undead caught in the open burn away as usual
+    if (!sl.burned && (st.key === 'wake')) {
+      sl.burned = true;
+      for (const e of this.entities) {
+        if (!e.dead && e.def.burns && this.world.hasSkyAccess(e.pos.x, e.pos.y + e.h, e.pos.z)) {
+          e.dead = true;
+          e.despawned = true;  // sunrise cleanup is not a player kill: no loot
+        }
+      }
+    }
+
+    this.ui.updateSleep(sl.lid, st.cap, sl.stage / (stages.length - 1));
+  }
+
+  /** Finish the cinematic and hand control back to the player. */
+  _endSleep(skipped = false) {
+    if (!this.sleep) return;
+    const sl = this.sleep;
+    this.worldTime = sl.morning;
     for (const e of this.entities) {
       if (!e.dead && e.def.burns && this.world.hasSkyAccess(e.pos.x, e.pos.y + e.h, e.pos.z)) {
         e.dead = true;
-        e.despawned = true; // sunrise cleanup is not a player kill and drops no loot
+        e.despawned = true;
       }
     }
-    p.health = Math.min(p.maxHealth, p.health + 4);
+    const p = this.player;
+    p.health = Math.min(p.maxHealth, Math.max(p.health, sl.healFrom + 4));
     p.air = p.maxAir;
-    this.ui.sleepFlash();
-    this.ui.toast('Good morning. Respawn point set.', 'good');
-    this.audio.click();
+    p.yaw = sl.yawTo;
+    p.pitch = 0.06;
+    this.sleep = null;
+    this.ui.endSleep();
+    this.ui.toast(skipped ? 'You wake with a start. Respawn point set.'
+      : 'Good morning. Respawn point set.', 'good');
     this.save(true);
+    this.requestPointerLock();
   }
 
   _pickBlock() {
@@ -1443,9 +1724,13 @@ export class Game {
     }
   }
 
-  _eatHeld() {
+  _eatHeld(slot) {
     const p = this.player;
-    if (p.eat(p.hotbarIdx)) {
+    if (slot === undefined) {
+      const use = p.useSlot(st => !!itemDef(st.id)?.food);
+      slot = use.slot === null ? p.hotbarIdx : use.slot;
+    }
+    if (p.eat(slot)) {
       this.particles.burst(p.pos.x, p.pos.y + 1.4, p.pos.z, 0xd8b070, 6, 1.2, 0.05, 0.5);
     }
   }
@@ -1864,7 +2149,11 @@ export class Game {
       const y = Math.floor(p.pos.y + (Math.random() - 0.5) * r);
       const z = Math.floor(p.pos.z + (Math.random() - 0.5) * r * 2);
       const id = this.world.getBlock(x, y, z);
-      if (id === B.TORCH) {
+      if (id === B.HEARTH) {
+        this.particles.spawn(x + 0.5 + (Math.random() - 0.5) * 0.7, y + 1.02, z + 0.5 + (Math.random() - 0.5) * 0.7,
+          (Math.random() - 0.5) * 0.2, 0.8 + Math.random() * 0.5, (Math.random() - 0.5) * 0.2,
+          Math.random() < 0.5 ? 0xffb648 : 0xff7a2a, 0.06, 1.2, 0.1);
+      } else if (id === B.TORCH || (id >= B.TORCH_N && id <= B.TORCH_W)) {
         this.particles.spawn(x + 0.5 + (Math.random() - 0.5) * 0.15, y + 0.72, z + 0.5 + (Math.random() - 0.5) * 0.15,
           (Math.random() - 0.5) * 0.15, 0.5 + Math.random() * 0.4, (Math.random() - 0.5) * 0.15,
           Math.random() < 0.5 ? 0xffb648 : 0xff7a2a, 0.05, 1.0, 0.08);
@@ -2095,4 +2384,12 @@ export class Game {
       vel ${p.vel.x.toFixed(1)} ${p.vel.y.toFixed(1)} ${p.vel.z.toFixed(1)} · ground ${p.onGround}
     `;
   }
+}
+
+/** Signed shortest delta from angle a to angle b, in radians. */
+function shortestAngle(a, b) {
+  let d = (b - a) % (Math.PI * 2);
+  if (d > Math.PI) d -= Math.PI * 2;
+  if (d < -Math.PI) d += Math.PI * 2;
+  return d;
 }

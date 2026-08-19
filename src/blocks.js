@@ -55,6 +55,18 @@ export const B = {
   DOOR_OPEN_E_LOW: 110, DOOR_OPEN_E_TOP: 111,
   DOOR_OPEN_S_LOW: 112, DOOR_OPEN_S_TOP: 113,
   DOOR_OPEN_W_LOW: 114, DOOR_OPEN_W_TOP: 115,
+
+  // Doors for the other three woods. Each wood owns a contiguous block of 16
+  // ids laid out as [closed low x4][closed top x4][open low x4][open top x4],
+  // indexed by facing (0=-Z, 1=+X, 2=+Z, 3=-X). Aspen keeps its historic
+  // scattered ids above so old saves still load.
+  DOOR_EMBER: 116, DOOR_PINE: 132, DOOR_PALM: 148,
+
+  // ---- extra building / decoration blocks --------------------------------
+  MOSSY_BRICKS: 164, CRACKED_BRICKS: 165, SMOOTH_STONE: 166,
+  CHISELED_SANDSTONE: 167, THATCH: 168, BOOKSHELF: 169, TIMBER_FRAME: 170,
+  PLASTER: 171, ROOF_TILE: 172, HEARTH: 173, FROST_BRICK: 174, MUD: 175,
+  DEAD_BUSH: 176, REEDS: 177,
 };
 
 /** wall-mounted ladder ids indexed by attach dir (0=-Z,1=+X,2=+Z,3=-X) */
@@ -64,13 +76,36 @@ export const TORCH_DIR = [90, 91, 92, 93];
 /** bed ids indexed by head direction (0=-Z,1=+X,2=+Z,3=-X) */
 export const BED_FOOT_DIR = [94, 95, 96, 97];
 export const BED_HEAD_DIR = [98, 99, 100, 101];
-/** door state ids indexed by facing */
+/** door state ids indexed by facing (Aspen — kept for older saves/imports) */
 export const DOOR_CLOSED_LOW = [54, 102, 104, 106];
 export const DOOR_CLOSED_TOP = [55, 103, 105, 107];
 export const DOOR_OPEN_LOW = [108, 110, 112, 114];
 export const DOOR_OPEN_TOP = [109, 111, 113, 115];
 
-const BLOCK_COUNT = 116;
+/** every wood a door can be made from, in registry order */
+export const DOOR_WOODS = ['aspen', 'ember', 'pine', 'palm'];
+const doorBlock = (base) => ({
+  closedLow: [base + 0, base + 1, base + 2, base + 3],
+  closedTop: [base + 4, base + 5, base + 6, base + 7],
+  openLow: [base + 8, base + 9, base + 10, base + 11],
+  openTop: [base + 12, base + 13, base + 14, base + 15],
+});
+/** wood -> { closedLow, closedTop, openLow, openTop } indexed by facing */
+export const DOOR_SETS = {
+  aspen: {
+    closedLow: DOOR_CLOSED_LOW, closedTop: DOOR_CLOSED_TOP,
+    openLow: DOOR_OPEN_LOW, openTop: DOOR_OPEN_TOP,
+  },
+  ember: doorBlock(B.DOOR_EMBER),
+  pine: doorBlock(B.DOOR_PINE),
+  palm: doorBlock(B.DOOR_PALM),
+};
+/** item id that places a given wood's door */
+export const DOOR_ITEM = { aspen: 'door_aspen', ember: 'door_ember', pine: 'door_pine', palm: 'door_palm' };
+/** legacy item id from saves made before doors gained wood types */
+export const LEGACY_ITEM_ALIAS = { door_low: 'door_aspen' };
+
+const BLOCK_COUNT = 178;
 
 // render classes
 export const R_SOLID = 0;   // full opaque cube
@@ -199,19 +234,26 @@ for (let d = 0; d < 4; d++) {
 
 // Doors remain in their own two cells when opened: state ids change the model
 // and collision instead of physically teleporting the blocks to a neighbour.
-const doorDef = (id, dir, top, open) => def(id, {
-  n: 'Timber Door', tex: top ? 'door_top' : 'door_low', render: R_DOOR,
-  noCollide: open, opacity: 0, hard: 1.0, use: 'door', drop: 'door_low',
-  door: true, doorDir: dir, doorTop: top, open, hidden: id !== B.DOOR_LOW,
+// Every wood gets its own full set of 16 states; `doorWood` ties a state back
+// to its item and to the other half of the same door.
+const WOOD_NAME = { aspen: 'Aspen', ember: 'Emberwood', pine: 'Pine', palm: 'Palm' };
+const doorDef = (id, wood, dir, top, open) => def(id, {
+  n: `${WOOD_NAME[wood]} Door`,
+  tex: `door_${wood}_${top ? 'top' : 'low'}`, render: R_DOOR,
+  noCollide: open, opacity: 0, hard: 1.0, use: 'door', drop: DOOR_ITEM[wood],
+  door: true, doorDir: dir, doorTop: top, open, doorWood: wood,
+  // only the canonical north-facing closed lower half is an inventory item
+  hidden: id !== DOOR_SETS[wood].closedLow[0],
 });
-doorDef(B.DOOR_LOW, 0, false, false); doorDef(B.DOOR_TOP, 0, true, false);
-doorDef(B.DOOR_E_LOW, 1, false, false); doorDef(B.DOOR_E_TOP, 1, true, false);
-doorDef(B.DOOR_S_LOW, 2, false, false); doorDef(B.DOOR_S_TOP, 2, true, false);
-doorDef(B.DOOR_W_LOW, 3, false, false); doorDef(B.DOOR_W_TOP, 3, true, false);
-doorDef(B.DOOR_OPEN_N_LOW, 0, false, true); doorDef(B.DOOR_OPEN_N_TOP, 0, true, true);
-doorDef(B.DOOR_OPEN_E_LOW, 1, false, true); doorDef(B.DOOR_OPEN_E_TOP, 1, true, true);
-doorDef(B.DOOR_OPEN_S_LOW, 2, false, true); doorDef(B.DOOR_OPEN_S_TOP, 2, true, true);
-doorDef(B.DOOR_OPEN_W_LOW, 3, false, true); doorDef(B.DOOR_OPEN_W_TOP, 3, true, true);
+for (const wood of DOOR_WOODS) {
+  const s = DOOR_SETS[wood];
+  for (let d = 0; d < 4; d++) {
+    doorDef(s.closedLow[d], wood, d, false, false);
+    doorDef(s.closedTop[d], wood, d, true, false);
+    doorDef(s.openLow[d], wood, d, false, true);
+    doorDef(s.openTop[d], wood, d, true, true);
+  }
+}
 
 // Beds use a low custom model. Only the canonical north-facing foot appears in
 // the inventory; every other half/state drops that same item.
@@ -242,6 +284,25 @@ def(B.WOOL_AMBER, { n: 'Amber Wool', tex: 'wool_amber', hard: 0.8, tool: 'shears
 def(B.WOOL_TEAL, { n: 'Teal Wool', tex: 'wool_teal', hard: 0.8, tool: 'shears' });
 def(B.WOOL_VIOLET, { n: 'Violet Wool', tex: 'wool_violet', hard: 0.8, tool: 'shears' });
 def(B.WOOL_SLATE, { n: 'Slate Wool', tex: 'wool_slate', hard: 0.8, tool: 'shears' });
+
+// ---------------------------------------------------------- extra materials
+// A second wave of building stock. These exist mainly so structures can be
+// built out of a real palette (masonry courses, plaster walls, tiled roofs,
+// thatch, shelving) instead of the same four blocks everywhere.
+def(B.MOSSY_BRICKS, { n: 'Mossy Stone Bricks', tex: 'mossy_bricks', hard: 1.9, tool: 'pick', tier: 1 });
+def(B.CRACKED_BRICKS, { n: 'Cracked Stone Bricks', tex: 'cracked_bricks', hard: 1.8, tool: 'pick', tier: 1 });
+def(B.SMOOTH_STONE, { n: 'Smooth Stone', tex: 'smooth_stone', hard: 1.7, tool: 'pick', tier: 1 });
+def(B.CHISELED_SANDSTONE, { n: 'Chiseled Sandstone', tex: { top: 'sandstone_top', bottom: 'sandstone_top', side: 'chiseled_sandstone' }, hard: 1.2, tool: 'pick', tier: 1 });
+def(B.THATCH, { n: 'Thatch', tex: { top: 'thatch_top', bottom: 'thatch_top', side: 'thatch_side' }, hard: 0.6, tool: 'shears' });
+def(B.BOOKSHELF, { n: 'Bookshelf', tex: { top: 'plank_aspen', bottom: 'plank_aspen', side: 'bookshelf' }, hard: 1.3, tool: 'axe' });
+def(B.TIMBER_FRAME, { n: 'Timber Frame', tex: 'timber_frame', hard: 1.1, tool: 'axe' });
+def(B.PLASTER, { n: 'Daub Plaster', tex: 'plaster', hard: 0.9, tool: 'pick' });
+def(B.ROOF_TILE, { n: 'Clay Roof Tiles', tex: { top: 'roof_tile', bottom: 'roof_tile', side: 'roof_tile' }, hard: 1.5, tool: 'pick', tier: 1 });
+def(B.HEARTH, { n: 'Ember Hearth', tex: { top: 'hearth_top', bottom: 'smooth_stone', side: 'hearth_side' }, hard: 1.6, tool: 'pick', tier: 1, light: 12 });
+def(B.FROST_BRICK, { n: 'Frost Bricks', tex: 'frost_brick', hard: 1.2, tool: 'pick' });
+def(B.MUD, { n: 'Mire Mud', tex: 'mud', hard: 0.7, tool: 'shovel' });
+def(B.DEAD_BUSH, { n: 'Dead Bush', tex: 'dead_bush', render: R_CROSS, noCollide: true, opacity: 0, hard: 0.05, drop: 'stick', dropChance: 0.6 });
+def(B.REEDS, { n: 'River Reeds', tex: 'reeds', render: R_CROSS, noCollide: true, opacity: 0, hard: 0.05 });
 
 // fill gaps
 for (let i = 0; i < BLOCK_COUNT; i++) if (!D[i]) D[i] = D[0] || null;
@@ -289,6 +350,7 @@ for (let i = 0; i < BLOCK_COUNT; i++) {
     door: !!d.door,
     doorDir: d.doorDir === undefined ? 0 : d.doorDir,
     doorTop: !!d.doorTop,
+    doorWood: d.doorWood || null,
     open: !!d.open,
     bed: !!d.bed,
     bedDir: d.bedDir === undefined ? 0 : d.bedDir,
@@ -413,7 +475,13 @@ function itemIdForBlock(id) {
     [B.CHISELED]: 'chiseled', [B.TILE_DARK]: 'tile_dark', [B.SLAB_STONE]: 'slab_stone',
     [B.LUMEN]: 'lumen', [B.BENCH]: 'bench', [B.SMELTER]: 'smelter', [B.CRATE]: 'crate',
     [B.TORCH]: 'torch', [B.LANTERN]: 'lantern', [B.LADDER]: 'ladder',
-    [B.DOOR_LOW]: 'door_low', [B.BED_FOOT_N]: 'bed', [B.TALL_GRASS]: 'tall_grass',
+    [B.BED_FOOT_N]: 'bed', [B.TALL_GRASS]: 'tall_grass',
+    [B.MOSSY_BRICKS]: 'mossy_bricks', [B.CRACKED_BRICKS]: 'cracked_bricks',
+    [B.SMOOTH_STONE]: 'smooth_stone', [B.CHISELED_SANDSTONE]: 'chiseled_sandstone',
+    [B.THATCH]: 'thatch', [B.BOOKSHELF]: 'bookshelf', [B.TIMBER_FRAME]: 'timber_frame',
+    [B.PLASTER]: 'plaster', [B.ROOF_TILE]: 'roof_tile', [B.HEARTH]: 'hearth',
+    [B.FROST_BRICK]: 'frost_brick', [B.MUD]: 'mud', [B.DEAD_BUSH]: 'dead_bush',
+    [B.REEDS]: 'reeds',
     [B.SHORT_GRASS]: 'short_grass', [B.FERN]: 'fern',
     [B.FLOWER_SUN]: 'flower_sun', [B.FLOWER_DUSK]: 'flower_dusk', [B.MUSHROOM]: 'mushroom',
     [B.BERRY_BUSH]: 'berry_bush', [B.CACTUS]: 'cactus',
@@ -426,7 +494,7 @@ function itemIdForBlock(id) {
   if (id >= B.LADDER_N && id <= B.LADDER_W) return 'ladder';
   if (id >= B.TORCH_N && id <= B.TORCH_W) return 'torch';
   const bl = BLOCKS[id];
-  if (bl && bl.door) return 'door_low';
+  if (bl && bl.door) return DOOR_ITEM[bl.doorWood] || 'door_aspen';
   if (bl && bl.bed) return 'bed';
   return names[id] || null;
 }

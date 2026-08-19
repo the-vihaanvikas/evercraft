@@ -17,6 +17,10 @@ const TIPS = [
   'Falling more than three blocks hurts. Water breaks a fall completely.',
   'Glimmer clusters are the rarest find — deep, dark and worth the trip.',
   'Your world autosaves every 45 seconds and when you exit to the title.',
+  'Press <b>X</b> to move an item into your off hand — a torch there lights the way.',
+  'Sleep in a bed at night: you wake at dawn, rested and healed.',
+  'Every wood makes its own door. Pine, aspen, emberwood and palm all hang differently.',
+  'Thatch, plaster and timber frame are the makings of a proper cottage.',
 ];
 
 let game = null;

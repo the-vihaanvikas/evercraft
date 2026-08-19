@@ -276,7 +276,8 @@ export class World {
     if (!c || !c.blocks) return false;
     const lx = x - cx * CHUNK_X, lz = z - cz * CHUNK_Z;
     const i = lx + lz * CHUNK_X + y * XZ;
-    if (c.blocks[i] === id) return false;
+    const prevId = c.blocks[i];
+    if (prevId === id) return false;
     c.blocks[i] = id;
     c.dirty = true;
     // Invalidate cached animated block-entity lists for this chunk.
@@ -303,9 +304,14 @@ export class World {
     if ((lx === 0 || lx === CHUNK_X - 1) && (lz === 0 || lz === CHUNK_Z - 1)) {
       mark(cx + (lx === 0 ? -1 : 1), cz + (lz === 0 ? -1 : 1));
     }
-    // emissive/opaque changes affect a radius -> dirty nearby chunks
-    const bl = BLOCKS[id];
-    if ((bl && bl.light > 4) || lx < 2 || lz < 2 || lx > CHUNK_X - 3 || lz > CHUNK_Z - 3) {
+    // Emissive/opaque changes affect a radius, so nearby chunks must relight.
+    // This has to look at the block that was REMOVED as well as the one placed:
+    // breaking a torch turns the cell into air (light 0), and only testing the
+    // new block left the neighbouring chunks holding the torch's baked light,
+    // so a ghost glow lingered around the empty socket.
+    const bl = BLOCKS[id], prevBl = BLOCKS[prevId];
+    const emitted = Math.max(bl ? bl.light : 0, prevBl ? prevBl.light : 0);
+    if (emitted > 4 || lx < 2 || lz < 2 || lx > CHUNK_X - 3 || lz > CHUNK_Z - 3) {
       for (let dz = -1; dz <= 1; dz++) for (let dx = -1; dx <= 1; dx++) mark(cx + dx, cz + dz);
     }
 

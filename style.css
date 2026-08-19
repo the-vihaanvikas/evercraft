@@ -13,6 +13,13 @@
   --red:#ff6a5c;
   --slot:#151a26;
   --slot2:#2a3348;
+  /* One pitch drives EVERY inventory grid (backpack, quick bar, chest,
+     crafting). It shrinks with the viewport so a full inventory always fits on
+     screen without scrolling, and every 9-wide grid lines up column for
+     column because they all share this measurement. */
+  --slot-size:clamp(30px,4.4vh,50px);
+  --slot-gap:5px;
+  --grid9:calc(var(--slot-size) * 9 + var(--slot-gap) * 8);
   /* Chunky pixel typeface stack. These are ubiquitous OS bitmap-ish faces;
      if none resolve we fall back to monospace, which still reads blocky. */
   --pixel:'Silkscreen','Press Start 2P','Monaco','Lucida Console','Courier New',monospace;
@@ -275,8 +282,13 @@ body.modal #crosshair{display:none}
 #xplvl{position:absolute;left:50%;top:-16px;transform:translateX(-50%);font:800 13px inherit;
   color:#9ff0a8;text-shadow:0 2px 3px #000,0 0 8px rgba(95,224,208,.6)}
 
+#handsRow{position:relative;display:flex;align-items:center;justify-content:center}
 #hotbar{display:flex;gap:5px;padding:5px;background:rgba(12,15,22,.62);
   border:1px solid rgba(90,110,150,.34);border-radius:12px;backdrop-filter:blur(8px)}
+/* off hand sits just left of the quick bar without shifting it off centre */
+#offhandSlot{position:absolute;right:100%;margin-right:12px;
+  background:rgba(12,15,22,.62);border:2px solid #3c4a68;border-radius:11px}
+#offhandSlot:empty{display:none}
 .hslot{
   width:50px;height:50px;background:rgba(30,37,53,.75);border:2px solid #333d54;border-radius:9px;
   position:relative;display:flex;align-items:center;justify-content:center;transition:.12s;
@@ -333,6 +345,29 @@ body.modal #crosshair{display:none}
 #sleepFade.play{animation:sleepFade 1.2s ease-in-out both}
 @keyframes sleepFade{0%{opacity:0}38%{opacity:1}65%{opacity:1}100%{opacity:0}}
 
+/* ---- sleep cinematic: eyelids, glow and stage caption ---- */
+#sleepCinema{position:absolute;inset:0;z-index:6;pointer-events:auto;overflow:hidden}
+#sleepCinema.hidden{display:none}
+#sleepCinema .lid{
+  position:absolute;left:-2%;width:104%;height:0;background:#05080e;
+  box-shadow:0 0 34px 18px rgba(3,5,9,.92);
+  transition:height .10s linear;
+}
+#sleepCinema .lid.top{top:0;border-bottom:2px solid #0a1018;border-radius:0 0 46% 46%/0 0 26px 26px}
+#sleepCinema .lid.bot{bottom:0;border-top:2px solid #0a1018;border-radius:46% 46% 0 0/26px 26px 0 0}
+#sleepCinema .sleepglow{position:absolute;inset:0;opacity:0;transition:opacity .3s;
+  background:radial-gradient(ellipse at 50% 50%,rgba(6,10,18,0) 34%,rgba(4,7,12,.92) 100%)}
+#sleepCinema .sleepcap{
+  position:absolute;left:50%;bottom:14%;transform:translateX(-50%);text-align:center;
+  font:700 15px inherit;letter-spacing:.14em;text-transform:uppercase;
+  color:#dfe7f5;text-shadow:0 2px 10px #000,0 0 22px rgba(120,160,220,.5);
+}
+#sleepCinema .sleepcap i{display:block;font-style:normal;font-size:13px;letter-spacing:.5em;
+  color:#8fa8d8;margin-top:8px}
+#sleepCinema .sleepcap.pop{animation:capIn .55s ease-out}
+@keyframes capIn{from{opacity:0;transform:translateX(-50%) translateY(8px)}to{opacity:1;transform:translateX(-50%)}}
+body.sleeping #crosshair,body.sleeping #hint,body.sleeping #hud{opacity:0;transition:opacity .5s}
+
 #deathScreen{position:absolute;inset:0;background:rgba(60,8,4,.55);display:flex;align-items:center;
   justify-content:center;pointer-events:auto;backdrop-filter:blur(6px)}
 #deathScreen.hidden{display:none}
@@ -348,7 +383,7 @@ body.modal #crosshair{display:none}
   backdrop-filter:blur(5px);pointer-events:auto}
 .panel{
   position:absolute;left:50%;top:50%;transform:translate(-50%,-50%);
-  width:min(660px,94vw);max-height:92vh;display:flex;flex-direction:column;
+  width:min(660px,94vw);max-height:94vh;display:flex;flex-direction:column;
   background:linear-gradient(180deg,#1d2433,#161b28);
   border:1px solid #37425c;border-radius:16px;pointer-events:auto;
   box-shadow:0 28px 80px rgba(0,0,0,.6);animation:panelIn .18s;
@@ -363,9 +398,9 @@ body.modal #crosshair{display:none}
 .phead .x{background:#252d3e;border:1px solid var(--line);color:var(--dim);width:30px;height:30px;
   border-radius:8px;cursor:pointer;font-size:14px;line-height:1}
 .phead .x:hover{background:#3a2028;color:#e08a88;border-color:#6d2f38}
-.pbody{padding:16px 18px;overflow:auto;flex:1}
+.pbody{padding:14px 18px;overflow:auto;flex:1 1 auto;min-height:0}
 .pfoot{padding:10px 18px;border-top:1px solid #2b3446;font-size:11.5px;color:var(--dim);text-align:center}
-.tabbed-panel{height:min(760px,92vh)}
+.tabbed-panel{max-height:94vh}
 .inventory-shell{display:flex;flex-direction:column;overflow:hidden;min-height:0;gap:10px}
 .inventory-tabs{display:flex;gap:4px;flex-wrap:wrap;flex:0 0 auto;border-bottom:1px solid #2b3446;padding-bottom:8px}
 .itab{background:#171d2a;border:1px solid #2b3446;border-bottom-color:#3a4560;color:#8ea0bd;
@@ -373,19 +408,22 @@ body.modal #crosshair{display:none}
   padding:7px 11px;text-transform:uppercase}
 .itab:hover{background:#202a3c;color:#d5deeb}
 .itab.on{background:#2a3958;border-color:var(--teal);color:#fff;box-shadow:inset 0 -2px 0 var(--teal)}
-.inventory-tab-content{flex:1 1 auto;min-height:0;overflow-y:auto;overflow-x:hidden;padding:0 4px 2px 0}
-.pinned-hotbar{flex:0 0 auto;background:#121824;border:1px solid #2b3446;border-radius:10px;padding:0 9px 9px}
-.pinned-hotbar .secline{margin:7px 0 6px}
-.pinned-hotbar .grid.hot{grid-template-columns:repeat(9,minmax(0,1fr));max-width:520px;width:100%;margin:0 auto}
+.inventory-tab-content{flex:1 1 auto;min-height:0;overflow-y:auto;overflow-x:hidden;padding:0}
+.pinned-hotbar{flex:0 0 auto;background:#121824;border:1px solid #2b3446;border-radius:10px;padding:0 0 10px}
+.pinned-hotbar .secline{margin:8px 14px 6px}
 .secline{font:700 11px inherit;letter-spacing:.14em;text-transform:uppercase;color:#6d7d99;
-  margin:14px 0 8px;display:flex;align-items:center;gap:10px}
+  margin:10px 0 6px;display:flex;align-items:center;gap:10px}
 .secline::after{content:'';flex:1;height:1px;background:#2b3446}
 
-.grid{display:grid;grid-template-columns:repeat(9,1fr);gap:5px}
-.grid.cont{grid-template-columns:repeat(9,1fr)}
-.grid.small{grid-template-columns:repeat(12,1fr);gap:4px}
+/* Every 9-column grid is exactly --grid9 wide and centred, so the backpack,
+   the chest, and the pinned quick bar sit on identical columns. */
+.grid{display:grid;grid-template-columns:repeat(9,var(--slot-size));gap:var(--slot-gap);
+  width:var(--grid9);margin:0 auto;justify-content:center}
+.grid.cont{grid-template-columns:repeat(9,var(--slot-size))}
+.grid.small{grid-template-columns:repeat(12,1fr);gap:4px;width:auto}
 .slot{
-  aspect-ratio:1;background:var(--slot);border:1px solid #2c3purple;border:1px solid #2c3548;
+  width:var(--slot-size);height:var(--slot-size);
+  background:var(--slot);border:1px solid #2c3548;
   border-radius:8px;position:relative;display:flex;align-items:center;justify-content:center;
   cursor:pointer;transition:.1s;
 }
@@ -393,10 +431,13 @@ body.modal #crosshair{display:none}
 .slot.filled{background:#1e2534;border-color:#3a4560}
 .grid.hot .slot{border-color:#4a4020;background:#20222c}
 .slot .ghost{font-size:9px;color:#4a5670;letter-spacing:.05em}
-.armorcol{display:flex;flex-direction:column;gap:6px;width:66px}
-.armorcol .slot{width:66px;height:66px}
-.armorcol .apts{font:700 11px inherit;color:var(--gold);text-align:center;margin-top:4px}
-.inv-layout{display:flex;gap:18px}
+.armorcol{display:flex;flex-direction:column;gap:5px;width:calc(var(--slot-size) + 8px);flex:0 0 auto}
+.armorcol .slot{width:calc(var(--slot-size) + 8px);height:calc(var(--slot-size) + 8px)}
+.armorcol .slot.offhand{margin-top:7px;border-color:#4a5a7c;background:#1a2231}
+.armorcol .slot.offhand.filled{border-color:var(--teal)}
+.armorcol .apts{font:700 10.5px inherit;color:var(--gold);text-align:center;margin-top:3px}
+/* the inventory is a column: [armour | doll | crafting | book] then backpack */
+.inv-layout{display:flex;flex-direction:column;gap:2px}
 .invmain{flex:1;min-width:0}
 .charbox{background:#141a26;border:1px solid #2b3446;border-radius:12px;padding:14px}
 .charlabel{font:800 13px inherit;letter-spacing:.08em;color:var(--teal);margin-bottom:10px}
@@ -437,40 +478,54 @@ body.modal #crosshair{display:none}
 
 /* ------------------------------------------------- shaped crafting grid */
 /* ------------------------------------------------- inventory paper doll --- */
-.invtop{display:flex;gap:14px;align-items:flex-start;margin-bottom:4px}
+.invtop{display:flex;gap:14px;align-items:flex-start;margin:2px 0 4px;flex-wrap:wrap}
 .playerdoll{background:#121824;border:1px solid #2b3446;border-radius:9px;
-  padding:8px 10px;display:flex;flex-direction:column;gap:6px;flex:0 0 auto}
-.playerdoll svg{width:78px;height:126px;display:block;image-rendering:pixelated}
+  padding:7px 9px;display:flex;flex-direction:column;gap:5px;flex:0 0 auto}
+.playerdoll svg{width:60px;height:96px;display:block;image-rendering:pixelated}
+.offrow{display:flex;flex-direction:column;align-items:center;gap:3px;margin-top:2px}
+.offrow span{font:700 8.5px inherit;letter-spacing:.09em;text-transform:uppercase;color:#6d7d99}
+.offrow .slot{width:calc(var(--slot-size) - 2px);height:calc(var(--slot-size) - 2px);
+  border-color:#4a5a7c;background:#1a2231}
+.offrow .slot.filled{border-color:var(--teal)}
 .dollbars{display:flex;flex-direction:column;gap:3px}
 .dollbar{height:5px;background:#0d1220;border-radius:3px;overflow:hidden}
 .dollbar i{display:block;height:100%;border-radius:3px}
 .dollbar.hp i{background:linear-gradient(90deg,#e8433c,#ff7a6e)}
 .dollbar.fd i{background:linear-gradient(90deg,#c9843c,#efc189)}
-.invcraft{flex:1 1 auto;min-width:0}
-.charstats.mini{display:flex;gap:14px;margin-top:8px;flex-wrap:wrap}
+.invcraft{flex:1 1 260px;min-width:0}
+.charstats.mini{display:flex;gap:14px;margin-top:4px;flex-wrap:wrap}
 .charstats.mini div{display:flex;gap:5px;align-items:baseline}
 .charstats.mini span{color:var(--dim);font-size:10.5px;text-transform:uppercase;letter-spacing:.06em}
 .charstats.mini b{color:#dbe5f5;font-size:12px}
 
 /* --- recipe book toggle (the little book icon beside a crafting grid) --- */
 .bookbtn{background:#1b2333;border:1px solid #33405a;border-radius:7px;cursor:pointer;
-  font-size:15px;line-height:1;padding:3px 8px;margin-left:auto;filter:grayscale(.5);
+  line-height:0;padding:5px 6px;filter:grayscale(.45);
+  display:inline-flex;align-items:center;justify-content:center;
   transition:background .12s,border-color .12s,filter .12s}
+.bookbtn svg{display:block;pointer-events:none}
 .bookbtn:hover{background:#243049;border-color:#4a5c80;filter:none}
 .bookbtn.on{background:#2a3958;border-color:var(--teal);filter:none;
   box-shadow:0 0 0 1px rgba(94,214,204,.25)}
 .secline .bookbtn{margin-left:8px}
 /* book button sits to the LEFT of the 3x3 grid at a crafting table */
 .craftrow{display:flex;align-items:center;gap:12px}
-.craftrow .bookbtn{margin-left:0;align-self:center;font-size:20px;padding:8px 10px}
+.craftrow .bookbtn{margin-left:0;align-self:center;padding:8px}
 .craftrow .craftbench{flex:1 1 auto}
 /* the crafting area sits inline in the inventory as well as the table */
-.inv-layout .craftbench{margin-bottom:6px}
-.inv-layout .cgrid .slot{width:42px;height:42px}
-.inv-layout.withbook{gap:16px}
-.inv-layout .craftright{flex:0 0 320px;max-width:340px}
+.inv-layout .craftbench{margin-bottom:4px;padding:10px 14px;gap:14px;width:max-content;max-width:100%}
+.craftrow{width:max-content;max-width:100%}
+.inv-layout .cgrid .slot{width:calc(var(--slot-size) - 4px);height:calc(var(--slot-size) - 4px)}
+/* The recipe book is a column of its own inside the top row: it never grows
+   the panel, it scrolls internally instead. */
+.inv-layout .craftright{flex:1 1 300px;min-width:280px;max-width:420px;
+  max-height:min(38vh,260px);overflow:hidden}
+.inv-layout .craftright .reclist{flex:1 1 auto;min-height:0;max-height:none}
+.inv-layout .craftright .bookhead{padding-bottom:7px}
+.inv-layout .craftright .cats{padding-bottom:7px;gap:5px}
+.inv-layout .craftright .cat{padding:4px 10px;font-size:11px}
 /* ------------------------------------------------ creative item palette --- */
-.creativebox{display:flex;flex-direction:column;gap:8px;min-width:0}
+.creativebox{display:flex;flex-direction:column;gap:8px;min-width:0;height:100%}
 .ctabs{display:flex;flex-wrap:wrap;gap:4px}
 .ctab{background:#161d2b;border:1px solid #2b3446;color:#8ea0bd;border-radius:6px;
   cursor:pointer;font:700 10.5px inherit;letter-spacing:.06em;padding:5px 9px;
@@ -483,17 +538,21 @@ body.modal #crosshair{display:none}
 .chead input{background:#121824;border:1px solid #2b3446;border-radius:6px;color:#dbe5f5;
   font:inherit;font-size:11.5px;margin-left:auto;max-width:190px;padding:5px 9px}
 .chead input:focus{border-color:var(--teal);outline:none}
-.cpalette{display:grid;gap:4px;grid-template-columns:repeat(auto-fill,minmax(42px,1fr));
-  max-height:44vh;overflow-y:auto;padding-right:4px}
-.cpalette .slot{cursor:pointer;height:42px;width:100%}
+.cpalette{display:grid;gap:4px;
+  grid-template-columns:repeat(auto-fill,minmax(var(--slot-size),1fr));
+  flex:1 1 auto;min-height:120px;max-height:52vh;overflow-y:auto;padding-right:4px;
+  width:auto;margin:0;align-content:start}
+.cpalette .slot{cursor:pointer;height:var(--slot-size);width:100%}
 .cpalette .slot:hover{border-color:var(--teal);box-shadow:0 0 0 1px rgba(94,214,204,.35)}
 .cpalette .cnt{display:none}
 .cpalette .empty{grid-column:1/-1}
 .chint{color:var(--dim);font-size:11px}
 .chint b{color:#c3cfe2}
-.craft-layout2{display:grid;grid-template-columns:minmax(300px,1fr) minmax(320px,1.1fr);gap:20px}
-.craft-layout2:has(.craftleft:only-child){grid-template-columns:1fr}
-.craftleft{min-width:0}
+.craft-layout2{display:flex;flex-direction:column;gap:2px}
+.crafttop{display:flex;gap:20px;align-items:flex-start;flex-wrap:wrap}
+.craftleft{min-width:0;flex:0 0 auto}
+.crafttop .craftright{flex:1 1 320px;min-width:290px}
+.crafttop .craftright .reclist{max-height:32vh}
 .craftright{min-width:0;display:flex;flex-direction:column}
 .craftbench{
   display:flex;align-items:center;justify-content:center;gap:18px;
@@ -503,11 +562,11 @@ body.modal #crosshair{display:none}
 .cgrid{display:grid;gap:5px}
 .cgrid.g2{grid-template-columns:repeat(2,1fr)}
 .cgrid.g3{grid-template-columns:repeat(3,1fr)}
-.cgrid .slot{width:48px;height:48px}
+.cgrid .slot{width:var(--slot-size);height:var(--slot-size)}
 .carrow{font-size:26px;color:#5f6f8c;font-weight:700}
 .cresult{display:flex;flex-direction:column;align-items:center;gap:6px}
 .cresult .slot.result{
-  width:62px;height:62px;
+  width:calc(var(--slot-size) + 12px);height:calc(var(--slot-size) + 12px);
   background:#1a2130;border-color:#3d4c68;
   box-shadow:inset 0 0 0 2px rgba(95,224,208,.10);
 }
@@ -545,16 +604,18 @@ body.modal #crosshair{display:none}
 .reclist .empty,.cpalette .empty,.pbody>.empty,.guide .empty{
   color:var(--dim);text-align:center;padding:40px;font-style:italic}
 
-.smelt{display:grid;grid-template-columns:auto 1fr auto;gap:22px;align-items:center;
-  background:#141a26;border:1px solid #2b3446;border-radius:12px;padding:18px;justify-items:center}
+.smelt{display:flex;justify-content:center;align-items:center;gap:26px;
+  background:#141a26;border:1px solid #2b3446;border-radius:12px;padding:16px}
+.smelt .arrowcol{flex:0 1 220px;min-width:120px}
 .scol{display:flex;flex-direction:column;align-items:center;gap:7px}
 .slbl{font:700 10px inherit;letter-spacing:.12em;text-transform:uppercase;color:#6d7d99}
-.smelt .slot{width:56px;height:56px}
-.smelt .slot.big{width:72px;height:72px;border-color:#4a5a7c}
+.smelt .slot{width:calc(var(--slot-size) + 6px);height:calc(var(--slot-size) + 6px)}
+.smelt .slot.big{width:calc(var(--slot-size) + 20px);height:calc(var(--slot-size) + 20px);border-color:#4a5a7c}
 .flame{width:20px;height:26px;background:#0d1119;border:1px solid #2b3446;border-radius:4px;
   display:flex;align-items:flex-end;overflow:hidden}
 .flame i{display:block;width:100%;background:linear-gradient(180deg,#ffd06a,#e8622a);transition:height .3s}
 .arrowcol{width:100%;text-align:center}
+.scol{flex:0 0 auto}
 .progress{height:12px;background:#0d1119;border:1px solid #2b3446;border-radius:6px;overflow:hidden}
 .progress i{display:block;height:100%;background:linear-gradient(90deg,#e8a03c,#ffd06a);transition:width .2s}
 .ptext{font-size:11px;color:var(--dim);margin-top:6px}
@@ -568,7 +629,7 @@ body.modal #crosshair{display:none}
 .opts input[type=checkbox]{width:16px;height:16px;accent-color:#4a94e0}
 .opts b{text-align:right;color:var(--teal);font-variant-numeric:tabular-nums;font-size:12px}
 
-#mapCanvas{width:100%;max-width:640px;aspect-ratio:1;display:block;margin:0 auto;
+#mapCanvas{width:auto;height:min(60vh,640px);max-width:100%;aspect-ratio:1;display:block;margin:0 auto;
   border:1px solid #2b3446;border-radius:12px;image-rendering:pixelated;background:#0d1017}
 .maplegend{display:flex;flex-wrap:wrap;gap:8px;justify-content:center;margin-top:12px;font-size:11px;color:var(--dim)}
 .maplegend span{display:inline-flex;align-items:center;gap:5px}
@@ -619,6 +680,26 @@ body.modal #crosshair{display:none}
 ::-webkit-scrollbar-track{background:#121724;border-radius:5px}
 ::-webkit-scrollbar-thumb{background:#37425c;border-radius:5px}
 ::-webkit-scrollbar-thumb:hover{background:#4a5a7c}
+
+/* Short screens: shrink the whole inventory chrome a notch so nothing is ever
+   pushed behind a scrollbar. Every measurement keys off --slot-size, so one
+   variable rescales all the grids together. */
+@media (max-height:760px){
+  :root{--slot-size:clamp(28px,4.2vh,42px)}
+  .phead{padding:10px 16px}
+  .phead h2{font-size:15px}
+  .pbody{padding:10px 14px}
+  .pfoot{padding:7px 16px;font-size:11px}
+  .secline{margin:7px 0 5px}
+  .playerdoll svg{width:52px;height:84px}
+  .inv-layout .craftbench{padding:8px 10px;gap:10px}
+  .inv-layout .craftright{max-height:200px}
+  .crafttop .craftright .reclist{max-height:min(26vh,170px)}
+  .pinned-hotbar{padding:0 0 7px}
+  .inventory-tabs{padding-bottom:6px}
+  .itab{padding:5px 9px}
+  .cpalette{max-height:44vh}
+}
 
 @media (max-width:820px){
   .craft-layout,.craft-layout2{grid-template-columns:1fr}

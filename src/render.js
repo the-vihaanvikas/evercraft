@@ -504,13 +504,25 @@ export function blockColor(id) {
     [B.WOOL_WHITE]: 0xeceff3, [B.WOOL_RED]: 0xc34a45, [B.WOOL_AMBER]: 0xe0a13c,
     [B.WOOL_TEAL]: 0x3fa39a, [B.WOOL_VIOLET]: 0x8a5cc0, [B.WOOL_SLATE]: 0x5a6472,
     [B.TORCH]: 0xff9a3c, [B.LANTERN]: 0xffe9a8, [B.LADDER]: 0x96714b,
-    [B.DOOR_LOW]: 0x8a6a45, [B.DOOR_TOP]: 0x8a6a45, [B.PATH]: 0x8a6a4a, [B.DRY_DIRT]: 0x8a6b47,
+    [B.PATH]: 0x8a6a4a, [B.DRY_DIRT]: 0x8a6b47,
     [B.PACKED_ICE]: 0x87c2e0, [B.COAL_BLOCK]: 0x2a2a30, [B.COPPER_BLOCK]: 0xc9743c,
     [B.IRON_BLOCK]: 0xd6cdc0, [B.GOLD_BLOCK]: 0xf0c04a, [B.AURORITE_BLOCK]: 0x5fe0d0,
     [B.GLIMMER_BLOCK]: 0xc77bf5, [B.SLAB_STONE]: 0xa3a5ac, [B.CHISELED]: 0x8d8f96,
     [B.TILE_DARK]: 0x4a4c55, [B.BEDROCK]: 0x2a2730,
+    // second-wave blocks
+    [B.MOSSY_BRICKS]: 0x7c8a70, [B.CRACKED_BRICKS]: 0x7f8188, [B.SMOOTH_STONE]: 0x9a9ca3,
+    [B.CHISELED_SANDSTONE]: 0xd9c48d, [B.THATCH]: 0xc9a24a, [B.BOOKSHELF]: 0x9a7343,
+    [B.TIMBER_FRAME]: 0xcfc5ad, [B.PLASTER]: 0xe0d8c4, [B.ROOF_TILE]: 0xa5533d,
+    [B.HEARTH]: 0xe8622a, [B.FROST_BRICK]: 0xcfe4f2, [B.MUD]: 0x4d3b2a,
+    [B.DEAD_BUSH]: 0x7a5a34, [B.REEDS]: 0x589f52,
   };
-  c = table[id] ?? 0x808080;
+  c = table[id];
+  if (c === undefined) {
+    const bl = BLOCKS[id];
+    if (bl && bl.door) {
+      c = { aspen: 0xcfc0a1, ember: 0xa55c42, pine: 0x96714b, palm: 0xbda079 }[bl.doorWood] || 0x8a6a45;
+    } else c = 0x808080;
+  }
   _colCache.set(id, c);
   return c;
 }

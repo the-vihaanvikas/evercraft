@@ -43,12 +43,29 @@ Requires a browser with **WebGL2** (Chrome, Edge, Firefox, Safari 15+).
 | `M` | World map |
 | `G` | Field guide |
 | `F` | Eat held food |
+| `X` | Swap main hand ↔ **off hand** |
 | `Q` | Drop item (`Shift+Q` whole stack) |
 | `F3` | Debug stats · `F5` or `V` cycles camera view |
 | `Esc` | Pause / options |
 
 **Controller:** sticks move & look, `RT` mine, `LT` place, `A` jump, `B` sneak,
 `X` eat, `Y` satchel, bumpers cycle hotbar, `Start` pause.
+
+### Hands
+Besides the nine quick-bar slots the player has an **off hand**: one extra stack
+carried in the left hand. It has its own slot under the inventory paper doll,
+shows as a small box beside the quick bar, and `X` swaps it with whatever the
+main hand holds. Right-click falls through to it, so a torch or a stack of
+blocks parked there can be used without touching the quick bar. In first person
+the left hand is drawn **only when it is holding something** — and while
+swimming, where both arms are needed for the stroke.
+
+### Sleeping
+Right-click a bed at night for a staged sleep cinematic: the camera lies down on
+the pillow, the eyelids slide shut, the clock races through the small hours
+while you heal, the eyes reopen on the real sunrise, and the player sits back
+up at 07:12. Interaction — mining, placing, menus, movement — is paused for the
+whole sequence (`Esc` skips it). Beds always set your respawn point, even by day.
 
 ---
 
@@ -79,9 +96,10 @@ click a recipe there to auto-fill the grid from your inventory.
 
 In Creative the crafting grid is replaced by the item palette: eight utility
 categories (Building Blocks, Nature, Decoration, Utility, Tools, Combat, Food,
-Materials) covering all 138 registered items, with a search box that spans every
-category. Click a tile for a full stack, shift-click to drop it straight into
-the quick bar, right-click for a single item.
+Materials) covering every registered item, with a search box that spans every
+category. **Click a tile for a single item, shift-click for a full stack**,
+clicking a different tile replaces what the cursor is holding, and clicking the
+empty space of the palette throws the held stack away.
 
 ### Liquids
 Water and lava flow: a source block spreads outward losing one level per step
@@ -145,10 +163,31 @@ Ladders and Torches are wall-mountable: aim at the *side* of a block and they
 attach to that face, ladders as a flat climbable panel and torches leaning out
 of the wall on a bracket. A ladder with nothing behind it will refuse to place.
 
+**Doors come in four woods** — Aspen, Emberwood, Pine and Palm — each crafted
+from its own planks, with its own tile art, and each swinging on its own hinge
+state (4 facings × open/closed × two halves). Old saves that stored the single
+generic door keep working; the item is migrated to the Aspen door on load.
+
+The building palette also includes Mossy and Cracked Stone Bricks, Smooth Stone,
+Chiseled Sandstone, Frost Bricks, Clay Roof Tiles, Thatch, Daub Plaster, Timber
+Frame, Bookshelves, Mire Mud and the light-emitting **Ember Hearth** — plus
+Dead Bush and River Reeds out in the world.
+
 ### Structures
 Explore to find ruined outposts, hunters' huts, watchtowers, abandoned
 campsites, well shafts dropping into the caves, desert obelisks and frost
 cairns — each matched to its biome and often holding a loot chest.
+
+Structures are **painted from the 3×3 chunk neighbourhood**, so a building whose
+origin sits in the next chunk still writes the part that overlaps this one:
+nothing is sliced off at a chunk border any more, and buildings can sit anywhere
+in a chunk. Every site is levelled onto a plinth that backfills to the real
+ground rather than floating, and the buildings themselves are properly
+detailed — corner pilasters and arched doorways on ruins, timber-framed walls,
+ridged and overhanging roofs, chimneys and porches on huts, buttressed bases,
+arrow slits, hoarding and crenellations on towers, A-frame tents and stone-ringed
+hearths in camps, coped rims and tiled canopies on wells, tiered and banded
+obelisks with corner braziers, and lantern-topped frost cairns.
 
 ---
 
@@ -190,10 +229,18 @@ cairns — each matched to its biome and often holding a loot chest.
   the WebAudio clock, so timing never drifts, and everything is pitched to
   exact 12-TET semitones.
 * **Camera** — `F5` (or `V`) cycles first person, over-the-shoulder and
-  front-facing. First person shows the player's arm and held item.
-  Third person draws a fully animated avatar (walk cycle, tool swing, flight
-  pose, head tracking the pitch) with the camera pulled in when terrain would
-  clip it.
+  front-facing. First person shows the player's arm and held item (and the off
+  hand when it holds one). Third person draws a fully animated avatar (walk
+  cycle, tool swing, flight pose, head tracking the pitch) with the camera
+  pulled in when terrain would clip it. The swim pose applies its pitch about
+  the avatar's *own* right axis (`YXZ` euler order), so the swimmer lies
+  face-down along its heading at every yaw instead of rolling onto its side,
+  and strokes a real alternating front crawl with a flutter kick.
+* **UI scale** — every inventory grid is laid out from a single
+  `--slot-size` custom property that tracks viewport height, so the backpack,
+  the chest, the crafting grids and the pinned quick bar always share the same
+  column pitch and the whole panel fits on screen without scrolling, down to
+  short laptop displays.
 * **Structures** — seven hand-written generators (ruined outpost with three
   floor plans, hunter's hut, watchtower, campsite, well shaft, desert obelisk,
   frost cairn) chosen by a biome-aware weighted roll, each using local wood and
@@ -236,8 +283,9 @@ test/              puppeteer test suites
 ```bash
 npm install                 # puppeteer
 python3 -m http.server 8080 &
-node test/systems.mjs       # 110 assertions: worldgen, recipes, combat, saves,
-                            # textures, perf, mobs, chests, camera, flight, music
+node test/systems.mjs       # 200+ assertions: worldgen, recipes, combat, saves,
+                            # textures, perf, mobs, chests, camera, flight, music,
+                            # lighting, doors, off hand, sleep, swimming, UI layout
 node test/smoke.mjs         # boot + play + reload, asserts zero console errors
 node test/visual.mjs        # screenshots of world, caves, UI
 node test/gallery.mjs       # title, night, inventory, smelter, guide
@@ -254,6 +302,15 @@ It also asserts the pixel-art invariants that are easy to regress: that
 top of its tile, that grass blades are rooted at the tile floor, that the two
 halves of tall grass break together, and that placing a torch does not inflate
 chunk relight cost.
+
+Round 6 covers the newer systems: that **breaking** a light source relights the
+neighbouring chunks (an emitter's glow used to linger in the chunks around the
+socket), that every wood's door opens/drops in kind, that the off hand is drawn
+only when filled and survives a save, that the sleep cinematic runs its stages,
+pauses interaction, heals and lands on morning, that the swimming avatar never
+rolls onto its side at any heading, that the new blocks are textured, craftable
+and in the palette, that structures spill across chunk borders deterministically,
+and that every inventory grid lines up and fits on screen without scrolling.
 
 ---
 

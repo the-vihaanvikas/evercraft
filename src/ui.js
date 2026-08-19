@@ -97,7 +97,10 @@ export class UI {
           <div class="statrow right" id="airRow"></div>
         </div>
         <div id="xpbar"><i></i><span id="xplvl">0</span></div>
-        <div id="hotbar"></div>
+        <div id="handsRow">
+          <div id="offhandSlot" class="hslot off" title="Off hand"></div>
+          <div id="hotbar"></div>
+        </div>
         <div id="itemname"></div>
       </div>
 
@@ -111,6 +114,12 @@ export class UI {
       <div id="damageFlash"></div>
       <div id="waterOverlay"></div>
       <div id="sleepFade"></div>
+      <div id="sleepCinema" class="hidden">
+        <div class="lid top"></div>
+        <div class="lid bot"></div>
+        <div class="sleepglow"></div>
+        <div class="sleepcap"><b></b><i></i></div>
+      </div>
       <div id="vignette"></div>
       <div id="screens"></div>
       <div id="deathScreen" class="hidden">
@@ -122,6 +131,7 @@ export class UI {
       </div>
     `;
     this.hotbarEl = $('#hotbar');
+    this.offhandEl = $('#offhandSlot');
     this.screensEl = $('#screens');
     this.toastEl = $('#toasts');
 
@@ -223,6 +233,14 @@ export class UI {
       this._lastHudKey = key;
       this.hotbarEl.innerHTML = parts.join('');
     }
+    // off hand: only present on the HUD when it actually holds something
+    const off = p.offhand;
+    const okey = off ? off.id + ':' + off.count : '';
+    if (this._lastOffKey !== okey) {
+      this._lastOffKey = okey;
+      this.offhandEl.innerHTML = off ? slotInner(off) : '';
+      this.offhandEl.style.display = off ? '' : 'none';
+    }
     const held = p.held;
     const el = $('#itemname');
     const name = held ? itemName(held.id) : '';
@@ -247,6 +265,49 @@ export class UI {
     const h = $('#hint');
     h.innerHTML = text || '';
     h.style.opacity = text ? '1' : '0';
+  }
+
+  /** Show the eyelid overlay and take over the screen for the sleep cinematic. */
+  beginSleep() {
+    const el = $('#sleepCinema');
+    el.classList.remove('hidden');
+    el.classList.add('on');
+    document.body.classList.add('sleeping');
+    this.updateSleep(0, '', 0);
+  }
+
+  /**
+   * Drive the cinematic overlay.
+   * @param {number} lid   0 = eyes open, 1 = eyes shut
+   * @param {string} cap   caption for the current stage
+   * @param {number} prog  0..1 overall progress, used for the caption fade
+   */
+  updateSleep(lid, cap, prog) {
+    const el = $('#sleepCinema');
+    if (!el) return;
+    const k = Math.max(0, Math.min(1, lid));
+    // eyelids meet in the middle; a touch past 50% guarantees no seam
+    el.querySelector('.lid.top').style.height = (k * 51).toFixed(2) + '%';
+    el.querySelector('.lid.bot').style.height = (k * 51).toFixed(2) + '%';
+    el.querySelector('.sleepglow').style.opacity = (0.30 + k * 0.45).toFixed(3);
+    const cw = el.querySelector('.sleepcap');
+    if (cw.dataset.c !== cap) {
+      cw.dataset.c = cap;
+      cw.querySelector('b').textContent = cap;
+      cw.querySelector('i').textContent = '\u2726 \u2726 \u2726'.slice(0, 1 + Math.round(prog * 5) * 2);
+      cw.classList.remove('pop'); void cw.offsetWidth; cw.classList.add('pop');
+    }
+  }
+
+  endSleep() {
+    const el = $('#sleepCinema');
+    if (!el) return;
+    el.classList.remove('on');
+    document.body.classList.remove('sleeping');
+    // fade the last sliver of eyelid out, then hide entirely
+    el.querySelector('.lid.top').style.height = '0%';
+    el.querySelector('.lid.bot').style.height = '0%';
+    setTimeout(() => el.classList.add('hidden'), 420);
   }
 
   sleepFlash() {
@@ -285,9 +346,11 @@ export class UI {
       this.game._setChestOpen(cx, cy, cz, false);
       this.game._openChest = null;
     }
-    // return cursor stack to inventory
+    // Return the cursor stack to the inventory. In Creative the palette is an
+    // infinite source, so a leftover stack is discarded instead of stuffed
+    // into the satchel.
     if (this.cursorStack) {
-      this.game.player.inv.add(this.cursorStack.id, this.cursorStack.count);
+      if (!this.isCreative()) this.game.player.inv.add(this.cursorStack.id, this.cursorStack.count);
       this.cursorStack = null;
       this._updateCursorGhost();
     }
@@ -449,6 +512,11 @@ export class UI {
         <div class="dollbar hp"><i style="width:${hpPct}%"></i></div>
         <div class="dollbar fd"><i style="width:${fdPct}%"></i></div>
       </div>
+      <div class="offrow">
+        <span>Off hand</span>
+        <div class="slot offhand ${p.offhand ? 'filled' : ''}" data-src="offhand" data-i="off"
+          title="Off hand — press X to swap hands">${p.offhand ? slotInner(p.offhand) : ''}</div>
+      </div>
     </div>`;
   }
 
@@ -460,28 +528,32 @@ export class UI {
     const inventoryOpen = this.inventoryTab === 'inventory';
     const tabs = `<div class="inventory-tabs">
       <button class="itab ${inventoryOpen ? 'on' : ''}" data-itab="inventory">Inventory</button>
-      ${creative ? CREATIVE_CATS.map(c => `<button class="itab ${this.inventoryTab === c.id ? 'on' : ''}"
+      ${creative ? CREATIVE_CATS.map(c => `<button class="itab ctab ${this.inventoryTab === c.id ? 'on' : ''}"
         data-itab="${c.id}">${c.n}</button>`).join('') : ''}
     </div>`;
+    // Layout: one top row (armour + paper doll + crafting + optional recipe
+    // book), then the backpack. The backpack and the pinned quick bar are both
+    // full-width blocks so their nine columns line up exactly.
     const inventory = `<div class="inv-layout${this.showBook ? ' withbook' : ''}">
-      ${this._armorPanel()}
-      <div class="invmain">
-        <div class="invtop">
-          ${this._playerPreview()}
-          <div class="invcraft">
-            <div class="secline">Crafting ${this._bookBtn()}</div>
+      <div class="invtop">
+        ${this._armorPanel()}
+        ${this._playerPreview()}
+        <div class="invcraft">
+          <div class="secline">Crafting</div>
+          <div class="craftrow">
+            ${this._bookBtn()}
             ${this._craftArea(2)}
-            <div class="charstats mini">
-              <div><span>Level</span><b>${p.level}</b></div>
-              <div><span>Mined</span><b>${p.stats.mined}</b></div>
-              <div><span>Placed</span><b>${p.stats.placed}</b></div>
-            </div>
+          </div>
+          <div class="charstats mini">
+            <div><span>Level</span><b>${p.level}</b></div>
+            <div><span>Mined</span><b>${p.stats.mined}</b></div>
+            <div><span>Placed</span><b>${p.stats.placed}</b></div>
           </div>
         </div>
-        <div class="secline">Backpack</div>
-        ${this._invGrid(HOTBAR, INV_SIZE)}
+        ${this._recipeBook()}
       </div>
-      ${this._recipeBook()}
+      <div class="secline">Backpack</div>
+      ${this._invGrid(HOTBAR, INV_SIZE)}
     </div>`;
     const tabContent = inventoryOpen ? inventory : this._creativePanel();
     return `<div class="panel wide tabbed-panel" id="invPanel">
@@ -687,7 +759,8 @@ export class UI {
         <input id="creativeSearch" placeholder="Search all items\u2026" value="${this.creativeFilter}">
       </div>
       <div class="cpalette">${cells}</div>
-      <div class="chint">Click for a full stack \u00b7 <b>Shift+click</b> sends it to the quick bar</div>
+      <div class="chint">Click for a single item \u00b7 <b>Shift+click</b> for a full stack \u00b7
+        click empty space to discard what you are holding</div>
     </div>`;
   }
 
@@ -752,28 +825,39 @@ export class UI {
 
   /** The little book button that shows/hides the recipe book. */
   _bookBtn() {
+    // Drawn as inline SVG rather than an emoji so the icon looks the same in
+    // every browser (and can be tinted when the book is open).
+    const icon = `<svg viewBox="0 0 18 18" width="20" height="20" aria-hidden="true">
+      <path d="M2 3.2c2.4-1 4.6-1 6.5.5v11c-1.9-1.5-4.1-1.5-6.5-.5z" fill="#c9a24a" stroke="#6b4a28" stroke-width="1"/>
+      <path d="M16 3.2c-2.4-1-4.6-1-6.5.5v11c1.9-1.5 4.1-1.5 6.5-.5z" fill="#e3c377" stroke="#6b4a28" stroke-width="1"/>
+      <path d="M9 4.2v10.6" stroke="#6b4a28" stroke-width="1.2"/>
+      <path d="M4 6.2h3M4 8.4h3M11 6.2h3M11 8.4h3" stroke="#8a6a45" stroke-width=".9"/>
+    </svg>`;
     return `<button class="bookbtn ${this.showBook ? 'on' : ''}" data-act="book"
-      title="${this.showBook ? 'Hide' : 'Show'} recipe book">\ud83d\udcd6</button>`;
+      title="${this.showBook ? 'Hide' : 'Show'} recipe book"
+      aria-label="Recipe book">${icon}</button>`;
   }
 
   _craftScreen() {
     this.refreshCraftResult();
     return `<div class="panel wide tabbed-panel" id="craftPanel">
-      <div class="phead"><h2>Crafting Table</h2>
+      <div class="phead"><h2>Crafting</h2>
         <button class="x" data-act="close">\u2715</button></div>
       <div class="pbody inventory-shell">
         <div class="inventory-tabs"><button class="itab on">Crafting</button></div>
         <div class="inventory-tab-content craft-layout2">
-          <div class="craftleft">
-            <div class="secline">3 \u00d7 3 Grid</div>
-            <div class="craftrow">
-              ${this._bookBtn()}
-              ${this._craftArea(3)}
+          <div class="crafttop">
+            <div class="craftleft">
+              <div class="secline">3 \u00d7 3 Grid</div>
+              <div class="craftrow">
+                ${this._bookBtn()}
+                ${this._craftArea(3)}
+              </div>
             </div>
-            <div class="secline">Backpack</div>
-            ${this._invGrid(HOTBAR, INV_SIZE)}
+            ${this._recipeBook()}
           </div>
-          ${this._recipeBook()}
+          <div class="secline">Backpack</div>
+          ${this._invGrid(HOTBAR, INV_SIZE)}
         </div>
         <div class="pinned-hotbar"><div class="secline">Quick Bar</div>${this._invGrid(0, HOTBAR, 'hot')}</div>
       </div>
@@ -790,9 +874,11 @@ export class UI {
     return `<div class="panel" id="cratePanel">
       <div class="phead"><h2>Chest</h2><button class="x" data-act="close">✕</button></div>
       <div class="pbody">
+        <div class="secline">Contents</div>
         <div class="grid cont">${h}</div>
         <div class="secline">Satchel</div>
         ${this._invGrid(HOTBAR, INV_SIZE)}
+        <div class="secline">Quick Bar</div>
         ${this._invGrid(0, HOTBAR, 'hot')}
       </div>
       <div class="pfoot">Shift+click to quick-transfer · <b>Esc</b> close</div>
@@ -825,6 +911,7 @@ export class UI {
         </div>
         <div class="secline">Satchel</div>
         ${this._invGrid(HOTBAR, INV_SIZE)}
+        <div class="secline">Quick Bar</div>
         ${this._invGrid(0, HOTBAR, 'hot')}
       </div>
       <div class="pfoot">Add ore + fuel (coal, charcoal, wood) · <b>Esc</b> close</div>
@@ -889,6 +976,15 @@ export class UI {
           </ul>
           <p>Use the right tool type too — a pick will not harvest wood, and an axe will not
           harvest ore.</p></section>
+        <section><h3>Hearth &amp; Home</h3>
+          <p>Beds set your respawn point and, at night, start a full night's rest: you lie
+          down, the sun comes up while you sleep and you wake healed at dawn. Exposed
+          undead burn away with the sunrise.</p>
+          <p>Doors come in <b>four woods</b> — aspen, emberwood, pine and palm — and each is
+          crafted from its own planks. Build with <b>thatch</b>, <b>timber frame</b>,
+          <b>plaster</b>, <b>roof tiles</b> and a glowing <b>ember hearth</b>.</p>
+          <p>Your <b>off hand</b> (the slot beside the paper doll, or <kbd>X</kbd> to swap)
+          carries a second stack — a torch there is held up as you walk.</p></section>
         <section><h3>The Deep</h3>
           <p>Below y=26 you'll find Iron and Gold. Below y=14, <b>Aurorite Geodes</b> glow teal and
           <b>Glimmer Clusters</b> shine violet. Lava pools sit near bedrock — bring blocks to bridge.</p></section>
@@ -912,6 +1008,7 @@ export class UI {
             <div><kbd>E</kbd> satchel</div><div><kbd>C</kbd> crafting</div>
             <div><kbd>M</kbd> map</div><div><kbd>F</kbd> eat held food</div>
             <div><kbd>Q</kbd> drop item</div><div><kbd>G</kbd> guide</div>
+            <div><kbd>X</kbd> swap hands</div><div><kbd>RMB</kbd> on a bed to sleep</div>
             <div><kbd>F5</kbd> camera view</div><div><kbd>Esc</kbd> pause</div>
             <div><kbd>Gamepad</kbd> full support</div><div><kbd>F3</kbd> debug stats</div>
           </div></section>
@@ -1005,7 +1102,20 @@ export class UI {
 
   _onSlotMouse(e) {
     const slot = e.target.closest('.slot');
-    if (!slot || !slot.dataset.src) return;
+    if (!slot || !slot.dataset.src) {
+      // Clicking the empty space of the Creative item menu throws the held
+      // stack away, the standard way to delete items in a creative palette.
+      if (this.cursorStack && this.isCreative() && e.target.closest('.creativebox')) {
+        e.preventDefault();
+        e.stopPropagation();
+        this.cursorStack = null;
+        this.game.audio.break_('stone');
+        this.toast('Item discarded.');
+        this.render();
+        this._updateCursorGhost();
+      }
+      return;
+    }
     e.preventDefault();
     e.stopPropagation();
     const src = slot.dataset.src;
@@ -1022,6 +1132,7 @@ export class UI {
     const p = this.game.player;
     if (src === 'inv') return p.inv.slots[+idx];
     if (src === 'armor') return p.armor[idx];
+    if (src === 'offhand') return p.offhand;
     if (src === 'cont') return this.openContainer.items[+idx];
     if (src === 'smelt') return this.openContainer[idx];
     if (src === 'craft') return this.craftGrid[this.gridIndex(+idx)];
@@ -1032,6 +1143,7 @@ export class UI {
     const p = this.game.player;
     if (src === 'inv') p.inv.slots[+idx] = v;
     else if (src === 'armor') p.armor[idx] = v;
+    else if (src === 'offhand') p.offhand = v;
     else if (src === 'cont') this.openContainer.items[+idx] = v;
     else if (src === 'smelt') this.openContainer[idx] = v;
     else if (src === 'craft') { this.craftGrid[this.gridIndex(+idx)] = v; this.refreshCraftResult(); }
@@ -1040,20 +1152,24 @@ export class UI {
   _slotClick(src, idx, right, shift) {
     const p = this.game.player;
 
-    // Creative catalogue: primary/left click takes a full stack; secondary
-    // click takes one. Handling this in the shared mouse-down path avoids the
-    // old right-click-only feel and works consistently with touch emulation.
+    // Creative catalogue.
+    //   click        -> a SINGLE item on the cursor (clicking the same tile
+    //                   again adds one more)
+    //   shift+click  -> a full stack
+    //   right click  -> a single item, same as a plain click
+    // Whatever the cursor was holding is simply replaced: in Creative the
+    // palette is an infinite source, so there is nothing to give back.
     if (src === 'creative') {
       const id = idx;
-      const count = right ? 1 : stackMax(id);
-      const stack = mkStack(id, count);
       const d = itemDef(id);
-      if (d && d.dur) stack.dur = d.dur;
-      if (shift) p.inv.slots[p.hotbarIdx] = stack;
-      else if (this.cursorStack && this.cursorStack.id === id && !this.cursorStack.dur)
-        this.cursorStack.count = Math.min(stackMax(id), this.cursorStack.count + count);
-      else {
-        if (this.cursorStack) p.inv.add(this.cursorStack.id, this.cursorStack.count);
+      const max = stackMax(id);
+      const count = shift ? max : 1;
+      const cur = this.cursorStack;
+      if (cur && cur.id === id && !cur.dur) {
+        cur.count = Math.min(max, cur.count + count);
+      } else {
+        const stack = mkStack(id, count);
+        if (d && d.dur) stack.dur = d.dur;
         this.cursorStack = stack;
       }
       return;
