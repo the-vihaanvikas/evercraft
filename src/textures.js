@@ -265,6 +265,27 @@ T.plank_ember = p => planks(p, '#a55c42', '#7d4230', '#c2765a');
 T.plank_pine = p => planks(p, '#96714b', '#6d5033', '#b08d64');
 T.plank_palm = p => planks(p, '#bda079', '#977c58', '#d6bd99');
 
+// fences: a central post with rail stubs either side, so UVs read as timber
+function fence(p, base, dark, light) {
+  p.clear();
+  p.rect(6, 0, 4, 16, base);
+  p.rect(6, 0, 4, 2, light);
+  p.rect(6, 12, 4, 4, dark);
+  // rail stubs at two heights (left and right of the post)
+  p.rect(0, 4, 6, 3, base);
+  p.rect(10, 4, 6, 3, base);
+  p.rect(0, 10, 6, 3, base);
+  p.rect(10, 10, 6, 3, base);
+  p.hline(2, 0, 3, light); p.hline(13, 0, 3, light);
+  p.hline(2, 13, 4, dark); p.hline(13, 13, 4, dark);
+  p.set(6, 2, light); p.set(9, 3, dark);
+  return p;
+}
+T.fence_aspen = p => fence(p, P.aspen, P.aspenD, '#e6dbc3');
+T.fence_ember = p => fence(p, '#a55c42', '#7d4230', '#c2765a');
+T.fence_pine = p => fence(p, '#96714b', '#6d5033', '#b08d64');
+T.fence_palm = p => fence(p, '#bda079', '#977c58', '#d6bd99');
+
 // ores
 function ore(p, host, gem, gemL, gemD, count = 5, glow = false) {
   host(p);
@@ -935,7 +956,13 @@ for (const slot of ['helm', 'chest', 'legs', 'boots'])
 export const TILE_NAMES = Object.keys(T);
 export const ICON_NAMES = Object.keys(I);
 
+// The tile atlas is a pure function of the (static) tile table, so it is
+// cached across the title screen and the game world instead of being drawn
+// twice (and the title 3D backdrop reuses the exact same DataArrayTexture
+// data the game world will).
+let _tileLayersCache = null;
 export function buildTileLayers() {
+  if (_tileLayersCache) return _tileLayersCache;
   const names = TILE_NAMES;
   const n = names.length;
   const data = new Uint8Array(TILE * TILE * 4 * n);
@@ -954,7 +981,21 @@ export function buildTileLayers() {
     }
     index[name] = i;
   });
-  return { data, index, count: n };
+  _tileLayersCache = { data, index, count: n };
+  return _tileLayersCache;
+}
+
+/**
+ * Like drawToCanvas but cached per name, so live 3D objects (held blocks,
+ * item drops) can build CanvasTextures from the same pixel art without
+ * redrawing per frame.
+ */
+const _canvasCache = new Map();
+export function iconCanvas(name, scale = 4) {
+  if (_canvasCache.has(name)) return _canvasCache.get(name);
+  const c = drawToCanvas(name, scale);
+  _canvasCache.set(name, c);
+  return c;
 }
 
 /** returns {canvas} for a single 16x16 tile/icon, scaled */
@@ -1056,6 +1097,32 @@ export function modelIconDataURL(key, model, texName, scale = 3) {
     ctx.fillStyle = '#6d5033';
     ctx.fillRect(S * .12, S * .66, S * .08, S * .20);
     ctx.fillRect(S * .80, S * .66, S * .08, S * .20);
+  } else if (model === 'fence') {
+    // three posts receding into the icon, rails crossing in front
+    const u = scale;
+    const post = (x, shade, w) => {
+      ctx.fillStyle = shade;
+      ctx.fillRect(x * u, 2 * u, w * u, 12 * u);
+      ctx.fillStyle = 'rgba(255,255,255,.18)';
+      ctx.fillRect(x * u, 2 * u, w * u, u);
+      ctx.fillStyle = 'rgba(0,0,0,.28)';
+      ctx.fillRect(x * u, 13 * u, w * u, u);
+      ctx.fillStyle = 'rgba(0,0,0,.22)';
+      ctx.fillRect(x * u, 2 * u, u, 12 * u);
+    };
+    post(1.5, '#6f563a', 2.5);
+    post(7, '#8a6a45', 3);
+    post(12, '#a8825a', 3);
+    // rails
+    ctx.fillStyle = '#8a6a45';
+    ctx.fillRect(0, 5 * u, 16 * u, 2 * u);
+    ctx.fillRect(0, 10 * u, 16 * u, 2 * u);
+    ctx.fillStyle = '#a8825a';
+    ctx.fillRect(0, 5 * u, 16 * u, u);
+    ctx.fillRect(0, 10 * u, 16 * u, u);
+    ctx.fillStyle = 'rgba(0,0,0,.25)';
+    ctx.fillRect(0, 7 * u, 16 * u, u);
+    ctx.fillRect(0, 12 * u, 16 * u, u);
   }
   const url = c.toDataURL();
   _dataUrlCache.set(ck, url);

@@ -2,7 +2,7 @@
 
 import {
   B, CHUNK_X, CHUNK_Z, WORLD_H, BLOCKS, block,
-  R_SOLID, R_CUTOUT, R_CROSS, R_LIQUID, R_TORCH, R_LADDER, R_DOOR, R_BED,
+  R_SOLID, R_CUTOUT, R_CROSS, R_LIQUID, R_TORCH, R_LADDER, R_DOOR, R_BED, R_FENCE,
 } from './blocks.js';
 
 const PAD = CHUNK_X;           // one chunk of padding each side
@@ -433,6 +433,10 @@ export function buildChunkMesh(cx, cz, provider) {
           emitBed(cutout, lx, y, lz, bl, bx, by, bz);
           continue;
         }
+        if (rc === R_FENCE) {
+          emitFence(cutout, lx, y, lz, bl, bx, by, bz);
+          continue;
+        }
         // Block entities (chests/lanterns) are drawn on the main thread as animated
         // 3D models, so the chunk mesh must not emit a cube for them.
         if (bl.blockEntity) continue;
@@ -692,6 +696,51 @@ function emitBed(buf, x, y, z, bl, bx, by, bz) {
     else if (bl.bedDir === 2) { z0 = 9 / 16; z1 = 14 / 16; }
     else if (bl.bedDir === 3) { x0 = 2 / 16; x1 = 7 / 16; z0 = 2 / 16; z1 = 14 / 16; }
     emit([x0, 10 / 16, z0, x1, 12 / 16, z1], texIndex.wool_white ?? cloth);
+  }
+}
+
+/**
+ * Fence: four corner posts plus rails on any side that touches another fence
+ * (any wood) or a solid block. Standalone posts render bare, exactly like a
+ * familiar block game's fences.
+ */
+function emitFence(buf, x, y, z, bl, bx, by, bz) {
+  const layer = texIndex[bl.tex] ?? 0;
+  const L = sampleLight(bx, by + 1, bz);
+  const sky = (L >> 4) / 15, blk = (L & 0x0f) / 15;
+  const lts = new Float32Array([sky, blk, sky, blk, sky, blk, sky, blk]);
+  const aoV = new Float32Array([1, 0.9, 0.9, 1]);
+  const uv = [[0, 1], [0, 0], [1, 0], [1, 1]];
+  const emit = (coords) => boxCorners(...coords).forEach((c, i) =>
+    buf.quad(x, y, z, c, uv, layer, lts, aoV, i === 3));
+
+  const P = 0.19;                     // post half-width  (posts span 0..0.38)
+  const R = 0.07;                     // rail half-thickness
+  // four corner posts, full height
+  for (const px of [0, 1]) for (const pz of [0, 1]) {
+    const x0 = px === 0 ? 0 : 1 - P * 2;
+    const z0 = pz === 0 ? 0 : 1 - P * 2;
+    emit([x0, 0, z0, x0 + P * 2, 1, z0 + P * 2]);
+  }
+  // rails run the FULL width of the cell so neighbouring fences meet
+  // seamlessly; each side connects to fences (any wood) or solid blocks.
+  const sides = [
+    { dx: 0, dz: -1, rail: [0, 0, 0.38, 1, 0.52] },     // -Z neighbour
+    { dx: 1, dz: 0, rail: [0.48, 0, 0, 0.62, 1] },      // +X neighbour
+    { dx: 0, dz: 1, rail: [0, 0, 0.48, 1, 0.62] },      // +Z neighbour
+    { dx: -1, dz: 0, rail: [0.38, 0, 0, 0.52, 1] },     // -X neighbour
+  ];
+  for (let s = 0; s < 4; s++) {
+    const nId = padBlocks[pidx(bx + sides[s].dx, by, bz + sides[s].dz)];
+    const nBl = BLOCKS[nId];
+    const connected = nId > 0 && nBl && !nBl.noCollide && !nBl.liquid &&
+      (nBl.render === R_FENCE || nBl.render === R_SOLID) && !nBl.blockEntity;
+    if (!connected) continue;
+    // two rails per side
+    for (const railY of [0.42, 0.82]) {
+      const r = sides[s].rail;
+      emit([r[0], railY - R, r[2], r[3], railY + R, r[4]]);
+    }
   }
 }
 

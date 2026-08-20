@@ -1,7 +1,11 @@
-// EVERCRAFT - bootstrap: title screen, loading, game start.
+// EVERCRAFT - bootstrap: cinematic title, loading, game start.
 
 import { Game } from './game.js';
-import { CHUNK_X } from './blocks.js';
+import * as THREE from '../vendor/three.module.js';
+import { World } from './world.js';
+import { WorldGen, findSpawn } from './worldgen.js';
+import { makeMaterials, Sky, Particles } from './render.js';
+import { Audio } from './audio.js';
 
 const $ = s => document.querySelector(s);
 
@@ -25,13 +29,7 @@ const TIPS = [
 
 let game = null;
 
-// ------------------------------------------------------------- title anim
-/**
- * Pixel-art parallax backdrop: a chunky voxel landscape rendered at low
- * resolution and upscaled with nearest-neighbour, so every edge stays blocky.
- * Drawn on an offscreen buffer at 1/PX scale then blitted, which is both
- * cheaper and guarantees crisp pixels.
- */
+// ------------------------------------------------------------- title splash
 const SPLASHES = [
   'Dig deeper!', 'Now with 100% more cubes!', 'Watch out for Gloom!',
   'Torches sold separately.', 'Voxels all the way down.', 'Mine responsibly!',
@@ -39,126 +37,237 @@ const SPLASHES = [
   'Aurorite glows in the dark!', 'Punch tree, get wood.', 'Sleep is optional.',
 ];
 
-function startTitleAnim() {
+/* ----------------------------------------------------------------- title
+ * A cinematic title, in the spirit of the reference: the game boots to a
+ * black screen, the wordmark slams in, and the camera then rises through a
+ * REAL generated voxel world — the same worldgen, shaders and chunk streaming
+ * the game itself uses — while the menu fades in over the flyover.
+ *
+ * The 3D scene renders to a small offscreen WebGL canvas and is blitted to
+ * the full-screen #titleCanvas with nearest-neighbour scaling, which keeps
+ * the blocky pixel look and costs a fraction of a full-res frame.
+ */
+class TitleWorld {
+  constructor() {
+    this.ready = false;
+    this.gen = new WorldGen((Math.random() * 1e9) >>> 0);
+    this.spawn = findSpawn(this.gen);
+
+    this.canvas = document.createElement('canvas');
+    this.renderer = new THREE.WebGLRenderer({
+      canvas: this.canvas, antialias: false, powerPreference: 'high-performance',
+      stencil: false,
+    });
+    this.renderer.outputColorSpace = THREE.SRGBColorSpace;
+    this.materials = makeMaterials(this.renderer);
+    this.scene = new THREE.Scene();
+    this.camera = new THREE.PerspectiveCamera(62, 1, 0.1, 500);
+    this.sky = new Sky(this.scene);
+    this.particles = new Particles(this.scene);
+
+    // warm golden-morning light for the flyover
+    this.scene.add(new THREE.HemisphereLight(0xbfd8f0, 0x37424f, 0.9));
+    const sun = new THREE.DirectionalLight(0xffe9c4, 1.25);
+    sun.position.set(40, 90, 20);
+    this.scene.add(sun);
+    this.sun = sun;
+
+    this.world = new World(this.scene, this.gen.seed, this.materials);
+    this.world.renderDist = 4;
+    this._resize();
+    window.addEventListener('resize', this._resize = this._resize.bind(this));
+
+    // stream the world around the spawn point, then start the flyover
+    this.world.initWorker(this.materials.texIndex, null).then(() => {
+      this.ready = true;
+    });
+  }
+
+  _resize() {
+    // low-res render target: ~1/3 of the screen, crisp when upscaled
+    const w = window.innerWidth, h = window.innerHeight;
+    this.rw = Math.max(320, Math.floor(w / 3));
+    this.rh = Math.max(180, Math.floor(h / 3));
+    this.canvas.width = this.rw;
+    this.canvas.height = this.rh;
+    this.renderer.setSize(this.rw, this.rh, false);
+    this.renderer.setPixelRatio(1);
+    this.camera.aspect = this.rw / this.rh;
+    this.camera.updateProjectionMatrix();
+  }
+
+  /**
+   * The flyover: a slow spiral that starts at grass level looking across the
+   * meadow, rises as it circles out, and keeps the spawn hill in frame.
+   * `t` is seconds since the flyover began; the loop is ~26s.
+   */
+  _cam(t, dt) {
+    const sp = this.spawn;
+    const loop = 26;
+    const u = (t % loop) / loop;
+    // one full turn, easing out so the motion breathes
+    const ang = u * Math.PI * 2 * (0.55 + u * 0.45);
+    const radius = 7 + u * 16 + Math.sin(u * Math.PI) * 2;
+    const x = sp.x + Math.cos(ang) * radius;
+    const z = sp.z + Math.sin(ang) * radius * 0.82;
+    const ground = this.world.heightAt(x, z);
+    // The ground estimate eases in, so the camera never snaps when a fresh
+    // chunk arrives — it simply glides to the real terrain height.
+    this._gY = this._gY === undefined ? ground : this._gY + (ground - this._gY) * Math.min(1, dt * 1.8);
+    // rise from a low walker's view to a high vista, with a gentle bob
+    const alt = 2.6 + u * 7.5 + Math.sin(t * 0.31) * 0.28;
+    const y = Math.max(this._gY + alt, this._gY + 2.2);
+    // look at the spawn hill, drifting slightly ahead of the camera
+    const look = new THREE.Vector3(
+      sp.x + Math.cos(ang + 0.45) * 5,
+      sp.y + 3.2 + Math.sin(t * 0.23) * 0.4,
+      sp.z + Math.sin(ang + 0.45) * 4);
+    this.camera.position.set(x, y, z);
+    this.camera.lookAt(look);
+    this.camera.fov = 62 + Math.sin(t * 0.12) * 3;
+    this.camera.updateProjectionMatrix();
+  }
+
+  update(dt, t) {
+    if (!this.ready) return;
+    // keep the chunk ring streaming around the camera
+    this.world.update(this.camera.position.x, this.camera.position.z);
+    this._cam(t, dt);
+    this.particles.update(dt, this.world);
+    // drifting motes of golden light
+    if (Math.random() < dt * 6) {
+      const p = this.camera.position;
+      this.particles.spawn(
+        p.x + (Math.random() - 0.5) * 30,
+        p.y + 1 + Math.random() * 8,
+        p.z + (Math.random() - 0.5) * 30,
+        0, 0.2 + Math.random() * 0.3, 0,
+        Math.random() < 0.5 ? 0xffe9a8 : 0xffd76a, 0.05, 1.8, 0);
+    }
+    const u = this.sky.uniforms;
+    u.uTop.value.setHex(0x4a86d6);
+    u.uHorizon.value.setHex(0xf0c9a0);
+    u.uNight.value = 0;
+    this.materials.shared.uDaylight.value = 1;
+    this.materials.shared.uSunColor.value.setHex(0xffe9c4);
+    this.materials.shared.uFogColor.value.setHex(0xcfe0ee);
+    // same fog falloff as the game, so the edge of the loaded ring stays hidden
+    const d = this.world.renderDist * 16;
+    this.materials.shared.uFogNear.value = d * 0.55;
+    this.materials.shared.uFogFar.value = d * 1.02;
+    this.sky.update(t, this.camera.position, 0.35);
+    this.sun.position.copy(this.camera.position).add(new THREE.Vector3(30, 60, 15));
+    this.sun.target.position.copy(this.camera.position);
+    this.sun.target.updateMatrixWorld();
+    this.renderer.render(this.scene, this.camera);
+  }
+
+  blit(ctx, w, h) {
+    ctx.imageSmoothingEnabled = false;
+    ctx.drawImage(this.canvas, 0, 0, this.rw, this.rh, 0, 0, w, h);
+  }
+
+  dispose() {
+    window.removeEventListener('resize', this._resize);
+    if (this.world.worker) this.world.worker.terminate();
+    this.renderer.dispose();
+  }
+}
+
+/**
+ * Boot the cinematic title: wordmark sting, 3D flyover, menu fade-in.
+ * Returns a dispose function for when the game starts.
+ */
+function startTitle() {
   const c = $('#titleCanvas');
   const ctx = c.getContext('2d', { alpha: false });
-  const PX = 4;                       // pixel size of the low-res buffer
-  const buf = document.createElement('canvas');
-  const bx = buf.getContext('2d', { alpha: false });
-  let W = 0, H = 0, raf = 0;
-
-  function resize() {
-    c.width = c.clientWidth; c.height = c.clientHeight;
-    W = Math.max(1, Math.ceil(c.width / PX));
-    H = Math.max(1, Math.ceil(c.height / PX));
-    buf.width = W; buf.height = H;
+  const boot = $('#boot');
+  const flash = $('#bootFlash');
+  const inner = $('#titleInner');
+  let titleWorld = null;
+  try {
+    titleWorld = new TitleWorld();
+  } catch (err) {
+    // No WebGL2: the menu must still work (the game reports unsupported on
+    // its own loading screen). Fall back to the plain backdrop.
+    console.warn('title flyover unavailable:', err.message);
   }
+  let raf = 0;
+  let t0 = performance.now();
+  let bootDone = false;
+
+  const resize = () => {
+    c.width = c.clientWidth; c.height = c.clientHeight;
+  };
   resize();
   window.addEventListener('resize', resize);
 
-  // deterministic value noise for the hill silhouettes
-  const rand = (n) => { const x = Math.sin(n * 127.1) * 43758.5453; return x - Math.floor(x); };
-  const layerHeight = (layer, wx, amp, base) => {
-    const s = wx * 0.06 + layer * 40;
-    const i = Math.floor(s), f = s - i;
-    const a = rand(i + layer * 13), b = rand(i + 1 + layer * 13);
-    const t = f * f * (3 - 2 * f);
-    return base + (a + (b - a) * t) * amp;
-  };
-
-  // parallax layers: far mountains -> mid hills -> near ground
-  const LAYERS = [
-    { sp: 2.5, amp: 10, base: 0.46, top: '#7d9ab0', side: '#66839b', dark: '#5a768d' },
-    { sp: 6.0, amp: 12, base: 0.60, top: '#5f9c52', side: '#4a7d40', dark: '#3f6b36' },
-    { sp: 13.0, amp: 9, base: 0.76, top: '#74bd5c', side: '#57964a', dark: '#487f3d' },
-  ];
-
-  // drifting pixel clouds
-  const clouds = [];
-  for (let i = 0; i < 9; i++) {
-    clouds.push({ x: Math.random(), y: 0.06 + Math.random() * 0.24, w: 8 + ((Math.random() * 14) | 0), sp: 0.4 + Math.random() * 0.9 });
-  }
-  // floating spark motes
-  const motes = [];
-  for (let i = 0; i < 26; i++) {
-    motes.push({ x: Math.random(), y: Math.random(), sp: 0.15 + Math.random() * 0.5, ph: Math.random() * 6.28 });
+  function finishBoot() {
+    if (bootDone) return;
+    bootDone = true;
+    boot.classList.add('gone');
+    flash.classList.add('play');
+    $('#title').classList.add('live');
+    inner.classList.add('show');
+    setTimeout(() => boot.remove(), 900);
+    setTimeout(() => flash.classList.remove('play'), 900);
   }
 
-  function draw(t) {
-    const time = t * 0.001;
-    // --- sky gradient, quantised into bands so it stays pixel-art ---
-    const BANDS = 12;
-    const horizon = H * 0.74;
-    for (let i = 0; i < BANDS; i++) {
-      const f = i / (BANDS - 1);
-      // deep blue overhead easing into a warm haze at the horizon
-      const r = Math.round(58 + f * 118), g = Math.round(104 + f * 90), b = Math.round(168 + f * 30);
-      bx.fillStyle = `rgb(${r},${g},${b})`;
-      bx.fillRect(0, Math.floor(horizon * f), W, Math.ceil(horizon / BANDS) + 1);
+  // skip the sting on any input
+  const skip = () => finishBoot();
+  window.addEventListener('pointerdown', skip, { once: true });
+  window.addEventListener('keydown', skip, { once: true });
+
+  // the boot sting is on a timer even without input
+  setTimeout(finishBoot, 2600);
+
+  let last = t0;
+  function draw(now) {
+    const dt = Math.min(0.05, (now - last) / 1000);
+    last = now;
+    const t = (now - t0) / 1000;
+    // black backdrop until the world is streaming
+    ctx.fillStyle = '#0d1017';
+    ctx.fillRect(0, 0, c.width, c.height);
+    if (titleWorld && titleWorld.ready) {
+      titleWorld.update(dt, t);
+      titleWorld.blit(ctx, c.width, c.height);
     }
-    bx.fillStyle = 'rgb(176,194,198)';
-    bx.fillRect(0, Math.floor(horizon), W, H - Math.floor(horizon));
-
-    // --- sun ---
-    const sunX = Math.floor(W * 0.80), sunY = Math.floor(H * 0.15);
-    bx.fillStyle = 'rgba(255,240,190,.16)';
-    bx.fillRect(sunX - 7, sunY - 5, 15, 11);
-    bx.fillRect(sunX - 5, sunY - 7, 11, 15);
-    // stepped disc: corners trimmed so it reads round at pixel scale
-    bx.fillStyle = '#ffe9a8';
-    bx.fillRect(sunX - 4, sunY - 2, 9, 5);
-    bx.fillRect(sunX - 2, sunY - 4, 5, 9);
-    bx.fillRect(sunX - 3, sunY - 3, 7, 7);
-    bx.fillStyle = '#fffbe4';
-    bx.fillRect(sunX - 2, sunY - 1, 4, 3);
-    bx.fillRect(sunX - 1, sunY - 2, 3, 4);
-
-    // --- clouds ---
-    bx.fillStyle = '#dce9f5';
-    for (const cl of clouds) {
-      cl.x -= cl.sp * 0.0004;
-      if (cl.x < -0.2) { cl.x = 1.2; cl.y = 0.06 + Math.random() * 0.24; }
-      const px = Math.floor(cl.x * W), py = Math.floor(cl.y * H);
-      bx.fillRect(px, py, cl.w, 3);
-      bx.fillRect(px + 2, py - 2, cl.w - 5, 2);
-      bx.fillRect(px + 4, py + 3, cl.w - 8, 2);
-    }
-
-    // --- parallax terrain ---
-    for (let li = 0; li < LAYERS.length; li++) {
-      const L = LAYERS[li];
-      const off = time * L.sp;
-      for (let x = 0; x < W; x++) {
-        const h = Math.floor(layerHeight(li, x + off, L.amp, 0) + H * L.base);
-        // grass cap
-        bx.fillStyle = L.top;
-        bx.fillRect(x, h, 1, 2);
-        // body with a subtle dither so it isn't a flat slab
-        bx.fillStyle = L.side;
-        bx.fillRect(x, h + 2, 1, H - h - 2);
-        if (((x + li * 3) & 3) === 0) {
-          bx.fillStyle = L.dark;
-          bx.fillRect(x, h + 3 + ((x * 7) % 5), 1, 2);
-        }
-      }
-    }
-
-    // --- motes ---
-    for (const m of motes) {
-      m.y -= m.sp * 0.0007;
-      if (m.y < 0) { m.y = 1; m.x = Math.random(); }
-      const a = 0.4 + 0.6 * Math.abs(Math.sin(time * 1.6 + m.ph));
-      bx.fillStyle = `rgba(255,233,168,${a.toFixed(2)})`;
-      bx.fillRect(Math.floor(m.x * W), Math.floor(m.y * H), 1, 1);
-    }
-
-    // blit upscaled, nearest-neighbour
-    ctx.imageSmoothingEnabled = false;
-    ctx.drawImage(buf, 0, 0, W, H, 0, 0, c.width, c.height);
     raf = requestAnimationFrame(draw);
   }
   raf = requestAnimationFrame(draw);
-  return () => cancelAnimationFrame(raf);
+
+  return () => {
+    cancelAnimationFrame(raf);
+    window.removeEventListener('resize', resize);
+    window.removeEventListener('pointerdown', skip);
+    window.removeEventListener('keydown', skip);
+    if (titleWorld) titleWorld.dispose();
+  };
+}
+
+// ------------------------------------------------------------ title music
+let titleAudio = null;
+let titleMusicTimer = null;
+let titleBar = 0;
+
+function startTitleMusic() {
+  if (titleAudio || !window.AudioContext) return;
+  titleAudio = new Audio();
+  titleAudio.init();
+  titleAudio.resume();
+  titleAudio.menuTick(0);
+  titleBar = 1;
+  titleMusicTimer = setInterval(() => {
+    if (titleAudio && titleAudio.ctx) {
+      titleAudio.menuTick(titleBar++);
+    }
+  }, 3600);
+}
+
+function stopTitleMusic() {
+  if (titleMusicTimer) { clearInterval(titleMusicTimer); titleMusicTimer = null; }
+  titleAudio = null;
 }
 
 // ----------------------------------------------------------------- menu
@@ -209,8 +318,12 @@ function escapeHtml(s) {
 }
 
 // ------------------------------------------------------------------ start
+let disposeTitle = null;
+
 async function begin(opts) {
   $('#title').style.display = 'none';
+  if (disposeTitle) { disposeTitle(); disposeTitle = null; }
+  stopTitleMusic();
   const loading = $('#loading');
   loading.classList.remove('hidden');
   $('#loadTip').innerHTML = TIPS[(Math.random() * TIPS.length) | 0];
@@ -276,7 +389,7 @@ async function begin(opts) {
 
 // ------------------------------------------------------------------- wire
 window.addEventListener('DOMContentLoaded', () => {
-  startTitleAnim();
+  disposeTitle = startTitle();
   $('#tabNew').onclick = () => setTab('#tabNew');
   $('#tabLoad').onclick = () => setTab('#tabLoad');
   $('#tabHelp').onclick = () => setTab('#tabHelp');
@@ -318,8 +431,11 @@ window.addEventListener('DOMContentLoaded', () => {
   $('#wseed').addEventListener('keydown', e => { if (e.key === 'Enter') $('#btnCreate').click(); });
   $('#wname').addEventListener('keydown', e => { if (e.key === 'Enter') $('#btnCreate').click(); });
 
-  // resume audio on any gesture
-  const resume = () => { if (game) game.audio.resume(); };
+  // resume audio on any gesture; the title theme starts with the first one
+  const resume = () => {
+    if (game) { game.audio.resume(); return; }
+    startTitleMusic();
+  };
   window.addEventListener('pointerdown', resume);
   window.addEventListener('keydown', resume);
 

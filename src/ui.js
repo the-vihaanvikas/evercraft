@@ -2,7 +2,7 @@
 
 import {
   B, BLOCKS, ITEM, itemDef, itemName, TIER_NAME, ARMOR_SLOTS,
-  R_CROSS, R_TORCH, R_LADDER, R_DOOR, R_BED,
+  R_CROSS, R_TORCH, R_LADDER, R_DOOR, R_BED, R_FENCE,
 } from './blocks.js';
 import { RECIPES, SMELT, FUEL, TAGS, isTag, tagMatches, CATS, matchGrid, ingredientMatches } from './recipes.js';
 import { CREATIVE_CATS, CREATIVE_PALETTE } from './creative.js';
@@ -31,6 +31,8 @@ export function itemIcon(id) {
           url = modelIconDataURL(id, 'door', bl.tex, 3);
         else if (bl.render === R_BED)
           url = modelIconDataURL(id, 'bed', bl.tex, 3);
+        else if (bl.render === R_FENCE)
+          url = modelIconDataURL(id, 'fence', bl.tex, 3);
         else if (d.block === B.LANTERN)
           url = modelIconDataURL(id, 'lantern', bl.tex, 3);
         else url = blockIconDataURL(id, bl.tex, 3);
@@ -121,12 +123,15 @@ export class UI {
         <div class="sleepcap"><b></b><i></i></div>
       </div>
       <div id="vignette"></div>
+      <div id="deathFade"></div>
       <div id="screens"></div>
       <div id="deathScreen" class="hidden">
         <div class="dbox">
+          <div class="dskull" aria-hidden="true"></div>
           <h1>You Fell</h1>
           <p id="deathCause">The world claimed you.</p>
           <button id="respawnBtn" class="bigbtn">Return to Spawn</button>
+          <div class="dstats"></div>
         </div>
       </div>
     `;
@@ -318,11 +323,52 @@ export class UI {
     setTimeout(() => el.classList.remove('play'), 1250);
   }
 
-  showDeath(cause) {
-    $('#deathCause').textContent = cause;
-    $('#deathScreen').classList.remove('hidden');
+  /**
+   * Drive the red-out phase of the death cinematic (0..1). Once the world has
+   * faded to red, showDeath() swaps in the panel.
+   */
+  updateDeath(f, cap) {
+    const k = Math.max(0, Math.min(1, f));
+    const el = $('#deathFade');
+    if (el) el.style.opacity = k.toFixed(3);
+    const df = $('#damageFlash');
+    if (df) df.style.opacity = (0.35 * k).toFixed(3);
+    if (cap !== undefined) this.updateDeathCap(cap);
   }
-  hideDeath() { $('#deathScreen').classList.add('hidden'); }
+
+  /** Caption shown between the closing veil and the death panel. */
+  updateDeathCap(cap) {
+    let el = $('#deathCap');
+    if (!cap) { if (el) el.style.opacity = '0'; return; }
+    if (!el) {
+      el = document.createElement('div');
+      el.id = 'deathCap';
+      document.body.appendChild(el);
+    }
+    el.textContent = cap;
+    el.style.opacity = '1';
+    el.classList.remove('pop'); void el.offsetWidth; el.classList.add('pop');
+  }
+
+  resetDeathFade() { this.updateDeath(0); }
+
+  showDeath(cause, stats) {
+    $('#deathCause').textContent = cause;
+    const d = $('#deathScreen');
+    d.classList.remove('hidden');
+    // small summary of the run, so the death screen doubles as a scorecard
+    const s = stats || {};
+    const el = $('#deathScreen .dstats');
+    if (el) {
+      el.innerHTML = `Day ${s.day || 1} · Level ${s.level || 0} · ` +
+        `${s.mined || 0} mined · ${s.placed || 0} built · ${s.killed || 0} felled`;
+    }
+  }
+  hideDeath() {
+    $('#deathScreen').classList.add('hidden');
+    this.updateDeathCap('');
+    this.resetDeathFade();
+  }
 
   // --------------------------------------------------------------- screens
   isOpen() { return this.screen !== null; }
@@ -981,8 +1027,9 @@ export class UI {
           down, the sun comes up while you sleep and you wake healed at dawn. Exposed
           undead burn away with the sunrise.</p>
           <p>Doors come in <b>four woods</b> — aspen, emberwood, pine and palm — and each is
-          crafted from its own planks. Build with <b>thatch</b>, <b>timber frame</b>,
-          <b>plaster</b>, <b>roof tiles</b> and a glowing <b>ember hearth</b>.</p>
+          crafted from its own planks. Fence off a farmyard with matching <b>fences</b>.
+          Build with <b>thatch</b>, <b>timber frame</b>, <b>plaster</b>, <b>roof tiles</b>
+          and a glowing <b>ember hearth</b>.</p>
           <p>Your <b>off hand</b> (the slot beside the paper doll, or <kbd>X</kbd> to swap)
           carries a second stack — a torch there is held up as you walk.</p></section>
         <section><h3>The Deep</h3>
@@ -993,10 +1040,13 @@ export class UI {
             <div><b>Hopper</b><span>Timid forager. Meat + hide.</span></div>
             <div><b>Woolback</b><span>Grazer. Shear for wool.</span></div>
             <div><b>Tusker</b><span>Peaceful until struck. Hits hard.</span></div>
-            <div><b>Plume</b><span>Bird. Feathers.</span></div>
+            <div><b>Plume</b><span>Ground bird. Feathers.</span></div>
+            <div><b>Fennix</b><span>Swift woodland fox. Startles easily.</span></div>
+            <div><b>Wisp</b><span>Glow spirit of summer nights. Flees the light of dawn.</span></div>
             <div class="bad"><b>Husk</b><span>Night walker. Burns at dawn.</span></div>
             <div class="bad"><b>Creeplet</b><span>Lunges from the dark.</span></div>
             <div class="bad"><b>Shardling</b><span>Cave sniper, throws shards.</span></div>
+            <div class="bad"><b>Emberling</b><span>Living ember of the grove. Fights with fire.</span></div>
             <div class="bad"><b>Gloom</b><span>Deep floater. Very dangerous.</span></div>
           </div></section>
         <section><h3>Controls</h3>
@@ -1221,7 +1271,16 @@ export class UI {
         }
         return;
       }
-      if (shift) { p.inv.add(cur.id, cur.count); this._setSlot(src, idx, null); return; }
+      if (shift) {
+        // Only remove what the inventory can actually hold — the old code
+        // cleared the output slot even when the satchel was full, silently
+        // deleting the smelted items.
+        const added = p.inv.add(cur.id, cur.count);
+        if (added >= cur.count) this._setSlot(src, idx, null);
+        else cur.count -= added;
+        if (added > 0) this.game.audio.pickup();
+        return;
+      }
       this.cursorStack = cur; this._setSlot(src, idx, null);
       return;
     }

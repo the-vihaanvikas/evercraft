@@ -67,6 +67,8 @@ export const B = {
   CHISELED_SANDSTONE: 167, THATCH: 168, BOOKSHELF: 169, TIMBER_FRAME: 170,
   PLASTER: 171, ROOF_TILE: 172, HEARTH: 173, FROST_BRICK: 174, MUD: 175,
   DEAD_BUSH: 176, REEDS: 177,
+  // fences: one per wood, thin posts + rails
+  FENCE_ASPEN: 178, FENCE_EMBER: 179, FENCE_PINE: 180, FENCE_PALM: 181,
 };
 
 /** wall-mounted ladder ids indexed by attach dir (0=-Z,1=+X,2=+Z,3=-X) */
@@ -105,7 +107,7 @@ export const DOOR_ITEM = { aspen: 'door_aspen', ember: 'door_ember', pine: 'door
 /** legacy item id from saves made before doors gained wood types */
 export const LEGACY_ITEM_ALIAS = { door_low: 'door_aspen' };
 
-const BLOCK_COUNT = 178;
+const BLOCK_COUNT = 182;
 
 // render classes
 export const R_SOLID = 0;   // full opaque cube
@@ -116,6 +118,7 @@ export const R_TORCH = 4;   // small post
 export const R_LADDER = 5;  // flat panel on wall
 export const R_DOOR = 6;    // thin panel
 export const R_BED = 7;     // low two-cell bed model
+export const R_FENCE = 8;   // posts + rails
 
 const D = [];
 function def(id, o) { D[id] = Object.assign({ id }, o); return D[id]; }
@@ -267,8 +270,18 @@ for (let d = 0; d < 4; d++) {
   bedDef(B.BED_HEAD_N + d, d, true);
 }
 
-def(B.SHORT_GRASS, { n: 'Wild Grass', tex: 'short_grass', render: R_CROSS, noCollide: true, opacity: 0, hard: 0.05, drop: 'seeds', dropChance: 0.35 });
-def(B.TALL_GRASS, { n: 'Tall Grass', tex: 'tall_grass', render: R_CROSS, noCollide: true, opacity: 0, hard: 0.05, drop: 'seeds', dropChance: 0.5 });
+// Fences: thin posts + rails, one wood each. They occupy a full cell for
+// collision but render as open timber so pens and yards read as fences.
+const fenceDef = (id, wood, tex) => def(id, {
+  n: `${WOOD_NAME[wood]} Fence`, tex, render: R_FENCE,
+  hard: 1.1, tool: 'axe', fenceWood: wood,
+});
+fenceDef(B.FENCE_ASPEN, 'aspen', 'fence_aspen');
+fenceDef(B.FENCE_EMBER, 'ember', 'fence_ember');
+fenceDef(B.FENCE_PINE, 'pine', 'fence_pine');
+fenceDef(B.FENCE_PALM, 'palm', 'fence_palm');
+
+def(B.SHORT_GRASS, { n: 'Wild Grass', tex: 'short_grass', render: R_CROSS, noCollide: true, opacity: 0, hard: 0.05, drop: 'seeds', dropChance: 0.35 });def(B.TALL_GRASS, { n: 'Tall Grass', tex: 'tall_grass', render: R_CROSS, noCollide: true, opacity: 0, hard: 0.05, drop: 'seeds', dropChance: 0.5 });
 // upper half of a two-block tall grass; always paired with TALL_GRASS below
 def(B.TALL_GRASS_TOP, { n: 'Tall Grass', tex: 'tall_grass_top', render: R_CROSS, noCollide: true, opacity: 0, hard: 0.05, drop: null, dropChance: 0 });
 def(B.FERN, { n: 'Fern', tex: 'fern', render: R_CROSS, noCollide: true, opacity: 0, hard: 0.05, drop: 'seeds', dropChance: 0.35 });
@@ -351,6 +364,7 @@ for (let i = 0; i < BLOCK_COUNT; i++) {
     doorDir: d.doorDir === undefined ? 0 : d.doorDir,
     doorTop: !!d.doorTop,
     doorWood: d.doorWood || null,
+    fenceWood: d.fenceWood || null,
     open: !!d.open,
     bed: !!d.bed,
     bedDir: d.bedDir === undefined ? 0 : d.bedDir,
@@ -489,6 +503,8 @@ function itemIdForBlock(id) {
     [B.WOOL_TEAL]: 'wool_teal', [B.WOOL_VIOLET]: 'wool_violet', [B.WOOL_SLATE]: 'wool_slate',
     [B.COAL_BLOCK]: 'coal_block', [B.COPPER_BLOCK]: 'copper_block', [B.IRON_BLOCK]: 'iron_block',
     [B.GOLD_BLOCK]: 'gold_block', [B.AURORITE_BLOCK]: 'aurorite_block', [B.GLIMMER_BLOCK]: 'glimmer_block',
+    [B.FENCE_ASPEN]: 'fence_aspen', [B.FENCE_EMBER]: 'fence_ember',
+    [B.FENCE_PINE]: 'fence_pine', [B.FENCE_PALM]: 'fence_palm',
     [B.WATER]: 'water', [B.LAVA]: 'lava',
   };
   if (id >= B.LADDER_N && id <= B.LADDER_W) return 'ladder';

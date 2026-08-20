@@ -52,11 +52,14 @@ function wing(w, h, d, color, x, y, z, side) {
      hopper    - small spring-legged forager (plains/forest)
      woolback  - fluffy grazer, drops wool + meat (plains/meadow)
      tusker    - sturdy tusked beast, drops hide + meat (forest/pine)
-     plume     - bird, drops feathers (all surface)
+     plume     - ground bird, drops feathers (all surface)
+     fennix    - swift woodland fox, startles and bolts (forest/meadow/plains)
+     wisp      - glow spirit of summer nights, drifts from approach
    Hostile:
      husk      - shambling night walker
      creeplet  - skittering ambusher that lunges
      shardling - crystalline cave dweller, ranged shard
+     emberling - living ember from the emberwood grove and lava pockets
      gloom     - deep-cave floater, drains light
 */
 
@@ -86,14 +89,21 @@ export const SPECIES = {
       const legFR = limb(1.7 * px, LEGB - 0.6 * px, 2 * px, furD, 2 * px, hipY - 0.4 * px, -2.4 * px);
       const legBL = limb(2.2 * px, LEGB, 3.4 * px, 0xa8875c, -2.2 * px, hipY, 2.6 * px);
       const legBR = limb(2.2 * px, LEGB, 3.4 * px, 0xa8875c, 2.2 * px, hipY, 2.6 * px);
+      // big soft foot pads under the hind paws
+      const padL = boxMesh(2.6 * px, 0.7 * px, 3.8 * px, 0xd8b08c, 0, -LEGB / 2 + 0.4 * px, 0);
+      const padR = boxMesh(2.6 * px, 0.7 * px, 3.8 * px, 0xd8b08c, 0, -LEGB / 2 + 0.4 * px, 0);
+      legBL.add(padL); legBR.add(padR);
       const eyeL = boxMesh(0.9 * px, 1 * px, 0.5 * px, 0x2a2118, -1.7 * px, hipY + 5.8 * px, -6.3 * px);
       const eyeR = boxMesh(0.9 * px, 1 * px, 0.5 * px, 0x2a2118, 1.7 * px, hipY + 5.8 * px, -6.3 * px);
+      // cheek tufts so the head isn't a plain box
+      const cheekL = boxMesh(1.5 * px, 1.1 * px, 0.7 * px, furL, -2.9 * px, hipY + 3.8 * px, -4.6 * px);
+      const cheekR = boxMesh(1.5 * px, 1.1 * px, 0.7 * px, furL, 2.9 * px, hipY + 3.8 * px, -4.6 * px);
 
       g.add(body, rump, head, muzzle, nose, earL, earR, innerL, innerR, tail,
-        legFL, legFR, legBL, legBR, eyeL, eyeR);
+        legFL, legFR, legBL, legBR, eyeL, eyeR, cheekL, cheekR);
       g.userData.legs = [legFL, legFR, legBL, legBR];
       g.userData.head = head;
-      g.userData.headParts = [muzzle, nose, eyeL, eyeR, earL, earR, innerL, innerR];
+      g.userData.headParts = [muzzle, nose, eyeL, eyeR, earL, earR, innerL, innerR, cheekL, cheekR];
       g.userData.ears = [earL, earR];
       return g;
     },
@@ -116,15 +126,20 @@ export const SPECIES = {
       const legs = [];
       for (const [dx, dz] of [[-0.26, -0.32], [0.26, -0.32], [-0.26, 0.34], [0.26, 0.34]]) {
         const l = limb(0.17, 0.44, 0.17, 0x4a4640, dx, 0.44, dz);
+        // dark hooves, slightly wider than the leg
+        const hoof = boxMesh(0.19, 0.08, 0.19, 0x241f1a, 0, -0.18, 0);
+        l.add(hoof);
         legs.push(l); g.add(l);
       }
       const eyeL = boxMesh(0.07, 0.08, 0.04, 0x14100c, -0.12, 0.86, -0.89);
       const eyeR = boxMesh(0.07, 0.08, 0.04, 0x14100c, 0.12, 0.86, -0.89);
+      const glintL = boxMesh(0.025, 0.025, 0.02, 0xffffff, -0.115, 0.875, -0.905);
+      const glintR = boxMesh(0.025, 0.025, 0.02, 0xffffff, 0.125, 0.875, -0.905);
       const tail = boxMesh(0.16, 0.20, 0.12, 0xf2f5f8, 0, 0.80, 0.52);
-      g.add(wool, wool2, woolR, head, snout, hornL, hornR, earL, earR, eyeL, eyeR, tail);
+      g.add(wool, wool2, woolR, head, snout, hornL, hornR, earL, earR, eyeL, eyeR, glintL, glintR, tail);
       g.userData.legs = legs;
       g.userData.head = head;
-      g.userData.headParts = [snout, hornL, hornR, earL, earR, eyeL, eyeR];
+      g.userData.headParts = [snout, hornL, hornR, earL, earR, eyeL, eyeR, glintL, glintR];
       g.userData.wool = [wool, wool2, woolR];
       g.userData.tail = tail;
       return g;
@@ -142,22 +157,32 @@ export const SPECIES = {
       const head = boxMesh(0.54, 0.52, 0.50, 0x7a6049, 0, 0.76, -0.80);
       const snout = boxMesh(0.32, 0.26, 0.22, 0x8f7256, 0, 0.65, -1.08);
       const nostril = boxMesh(0.20, 0.06, 0.05, 0x5c4735, 0, 0.68, -1.19);
+      // tusks are two stacked segments so they read as curving up
       const tuskL = boxMesh(0.08, 0.09, 0.32, 0xe8e0cc, -0.17, 0.60, -1.14);
       const tuskR = boxMesh(0.08, 0.09, 0.32, 0xe8e0cc, 0.17, 0.60, -1.14);
+      const tuskLTip = boxMesh(0.06, 0.07, 0.16, 0xf4efe0, -0.17, 0.68, -1.30);
+      const tuskRTip = boxMesh(0.06, 0.07, 0.16, 0xf4efe0, 0.17, 0.68, -1.30);
       const earL = boxMesh(0.10, 0.18, 0.12, 0x5e4936, -0.29, 0.96, -0.74);
       const earR = boxMesh(0.10, 0.18, 0.12, 0x5e4936, 0.29, 0.96, -0.74);
+      const earInL = boxMesh(0.06, 0.10, 0.07, 0xa8846a, -0.30, 0.94, -0.76);
+      const earInR = boxMesh(0.06, 0.10, 0.07, 0xa8846a, 0.30, 0.94, -0.76);
       const legs = [];
       for (const [dx, dz] of [[-0.30, -0.40], [0.30, -0.40], [-0.30, 0.42], [0.30, 0.42]]) {
         const l = limb(0.23, 0.44, 0.23, 0x4a3826, dx, 0.44, dz);
+        const hoof = boxMesh(0.25, 0.08, 0.25, 0x2e2317, 0, -0.18, 0);
+        l.add(hoof);
         legs.push(l); g.add(l);
       }
       const eyeL = boxMesh(0.07, 0.08, 0.04, 0x1a1410, -0.17, 0.86, -1.04);
       const eyeR = boxMesh(0.07, 0.08, 0.04, 0x1a1410, 0.17, 0.86, -1.04);
       const tail = limb(0.08, 0.28, 0.08, 0x54402f, 0, 0.92, 0.60);
-      g.add(body, back, mane, head, snout, nostril, tuskL, tuskR, earL, earR, eyeL, eyeR, tail);
+      const tailTuft = boxMesh(0.14, 0.12, 0.14, 0x3a2b1c, 0, -0.30, 0);
+      tail.add(tailTuft);
+      g.add(body, back, mane, head, snout, nostril, tuskL, tuskR, tuskLTip, tuskRTip,
+        earL, earR, earInL, earInR, eyeL, eyeR, tail);
       g.userData.legs = legs;
       g.userData.head = head;
-      g.userData.headParts = [snout, nostril, tuskL, tuskR, earL, earR, eyeL, eyeR];
+      g.userData.headParts = [snout, nostril, tuskL, tuskR, tuskLTip, tuskRTip, earL, earR, earInL, earInR, eyeL, eyeR];
       g.userData.tail = tail;
       return g;
     },
@@ -181,8 +206,15 @@ export const SPECIES = {
       const crest = boxMesh(0.9 * px, 1.8 * px, 1.6 * px, 0xd8564a, 0, hipY + 8.8 * px, -2.4 * px);
       const wingL = wing(1 * px, 3.4 * px, 4.6 * px, wingC, -2.4 * px, hipY + 3 * px, 0, -1);
       const wingR = wing(1 * px, 3.4 * px, 4.6 * px, wingC, 2.4 * px, hipY + 3 * px, 0, 1);
+      // secondary feather layer behind each wing for depth
+      const wingL2 = wing(0.9 * px, 2.6 * px, 3.4 * px, 0xb8b09c, -2.2 * px, hipY + 2.6 * px, 1 * px, -1);
+      const wingR2 = wing(0.9 * px, 2.6 * px, 3.4 * px, 0xb8b09c, 2.2 * px, hipY + 2.6 * px, 1 * px, 1);
+      // tail fan: three angled feathers
       const tail = boxMesh(3 * px, 2 * px, 2.6 * px, wingC, 0, hipY + 3.4 * px, 4 * px);
       const tailTip = boxMesh(2.2 * px, 1.4 * px, 1.6 * px, 0xb0a894, 0, hipY + 4.4 * px, 5.2 * px);
+      const fanL = boxMesh(1 * px, 1 * px, 2.4 * px, 0xc8bfa8, -1.8 * px, hipY + 4 * px, 5.6 * px);
+      const fanM = boxMesh(1.2 * px, 1.2 * px, 3 * px, 0xd8d0b8, 0, hipY + 5 * px, 5.6 * px);
+      const fanR = boxMesh(1 * px, 1 * px, 2.4 * px, 0xc8bfa8, 1.8 * px, hipY + 4 * px, 5.6 * px);
       const legL = limb(0.8 * px, LEG, 0.8 * px, beakC, -1.2 * px, hipY, 0.4 * px);
       const legR = limb(0.8 * px, LEG, 0.8 * px, beakC, 1.2 * px, hipY, 0.4 * px);
       const footL = boxMesh(1.4 * px, 0.5 * px, 2 * px, 0xd0902c, -1.2 * px, 0.25 * px, -0.4 * px);
@@ -190,13 +222,108 @@ export const SPECIES = {
       const eyeL = boxMesh(0.6 * px, 0.8 * px, 0.4 * px, 0x1a1410, -1.4 * px, hipY + 6.9 * px, -4 * px);
       const eyeR = boxMesh(0.6 * px, 0.8 * px, 0.4 * px, 0x1a1410, 1.4 * px, hipY + 6.9 * px, -4 * px);
 
-      g.add(torso, breast, head, beak, wattle, crest, wingL, wingR, tail, tailTip,
-        legL, legR, footL, footR, eyeL, eyeR);
+      g.add(torso, breast, head, beak, wattle, crest, wingL, wingR, wingL2, wingR2,
+        tail, tailTip, fanL, fanM, fanR, legL, legR, footL, footR, eyeL, eyeR);
       g.userData.wings = [wingL, wingR];
+      g.userData.wings2 = [wingL2, wingR2];
       g.userData.legs = [legL, legR];
       g.userData.feet = [footL, footR];
       g.userData.head = head;
       g.userData.headParts = [beak, wattle, crest, eyeL, eyeR];
+      return g;
+    },
+  },
+  fennix: {
+    friendly: true, hp: 10, speed: 3.6, w: 0.55, h: 0.62, view: 12, skittish: true, fleeRange: 6.5,
+    drops: [['raw_fowl', 1, 1], ['hide', 0, 1]], xp: 2,
+    biomes: [BIOME.FOREST, BIOME.MEADOW, BIOME.PLAINS, BIOME.EMBERWOOD],
+    build: () => {
+      // Slender red fox: long low body, white chest, huge tail. ~0.62 tall.
+      const g = new THREE.Group();
+      const px = 1 / 16;
+      const LEG = 3.6 * px, hipY = LEG;
+      const fur = 0xd97a3a, furL = 0xe89c55, furD = 0xa84e26, cream = 0xf2e6cc, dark = 0x33251c;
+
+      const body = boxMesh(5.2 * px, 4.2 * px, 8.8 * px, fur, 0, hipY + 2.1 * px, 0.5 * px);
+      const chest = boxMesh(4.2 * px, 3.8 * px, 2.6 * px, cream, 0, hipY + 2.2 * px, -3.6 * px);
+      const rump = boxMesh(4.6 * px, 3.8 * px, 2.4 * px, furD, 0, hipY + 2.4 * px, 4 * px);
+      const head = boxMesh(4.2 * px, 3.8 * px, 4.6 * px, fur, 0, hipY + 5.6 * px, -4.6 * px);
+      const snout = boxMesh(2.2 * px, 1.7 * px, 1.6 * px, cream, 0, hipY + 4.7 * px, -7.3 * px);
+      const nose = boxMesh(0.9 * px, 0.7 * px, 0.7 * px, dark, 0, hipY + 5.2 * px, -8.1 * px);
+      const earL = limb(1.2 * px, 3.2 * px, 1.2 * px, furL, -1.7 * px, hipY + 9.2 * px, -4.4 * px);
+      const earR = limb(1.2 * px, 3.2 * px, 1.2 * px, furL, 1.7 * px, hipY + 9.2 * px, -4.4 * px);
+      const innerL = boxMesh(0.6 * px, 2 * px, 0.5 * px, 0xd8a0a8, -1.7 * px, hipY + 8 * px, -4.6 * px);
+      const innerR = boxMesh(0.6 * px, 2 * px, 0.5 * px, 0xd8a0a8, 1.7 * px, hipY + 8 * px, -4.6 * px);
+      const cheekL = boxMesh(1.1 * px, 1 * px, 0.6 * px, furL, -2.3 * px, hipY + 4.2 * px, -5.4 * px);
+      const cheekR = boxMesh(1.1 * px, 1 * px, 0.6 * px, furL, 2.3 * px, hipY + 4.2 * px, -5.4 * px);
+      const eyeL = boxMesh(0.8 * px, 0.9 * px, 0.4 * px, 0x1d1710, -1.6 * px, hipY + 6.2 * px, -6.7 * px);
+      const eyeR = boxMesh(0.8 * px, 0.9 * px, 0.4 * px, 0x1d1710, 1.6 * px, hipY + 6.2 * px, -6.7 * px);
+      const legs = [];
+      for (const [dx, dz] of [[-1.9, -2.6], [1.9, -2.6], [-1.9, 3], [1.9, 3]]) {
+        const l = limb(1.5 * px, LEG, 1.6 * px, dark, dx * px, hipY, dz * px);
+        // dark sock at the bottom of each leg
+        const sock = boxMesh(1.6 * px, 1.1 * px, 1.7 * px, 0x1d1710, 0, -LEG / 2 + 0.5 * px, 0);
+        l.add(sock);
+        legs.push(l); g.add(l);
+      }
+      // big swishing tail: pivot at the rump, body + cream tip hanging behind
+      const tail = limb(1.9 * px, 5.6 * px, 1.9 * px, fur, 0, hipY + 2.6 * px, 5.6 * px);
+      const tailTip = boxMesh(2.2 * px, 2.2 * px, 2.2 * px, cream, 0, -5.2 * px, -0.4 * px);
+      tail.add(tailTip);
+      g.add(body, chest, rump, head, snout, nose, earL, earR, innerL, innerR,
+        cheekL, cheekR, eyeL, eyeR, tail);
+      g.userData.legs = legs;
+      g.userData.head = head;
+      g.userData.headParts = [snout, nose, earL, earR, innerL, innerR, cheekL, cheekR, eyeL, eyeR];
+      g.userData.ears = [earL, earR];
+      g.userData.tail = tail;
+      return g;
+    },
+  },
+  wisp: {
+    friendly: true, hp: 4, speed: 1.7, w: 0.38, h: 0.5, view: 11, floater: true, skittish: true,
+    fleeRange: 5.2, shy: true,
+    drops: [], xp: 1,
+    biomes: [BIOME.FOREST, BIOME.MEADOW, BIOME.PLAINS, BIOME.MARSH],
+    build: () => {
+      // A tiny lantern of a spirit: a warm orb with a halo and a fading tail.
+      // Every mesh uses a MeshBasicMaterial so the wisp genuinely glows in
+      // the dark instead of waiting for torchlight to reach it.
+      const g = new THREE.Group();
+      const px = 1 / 16;
+      const basic = (color) => new THREE.MeshBasicMaterial({ color });
+      const orb = (w, h, d, color, x, y, z) => {
+        const m = new THREE.Mesh(new THREE.BoxGeometry(w, h, d), basic(color));
+        m.position.set(x, y, z);
+        return m;
+      };
+      const core = orb(4.2 * px, 4.2 * px, 4.2 * px, 0xd8f0ff, 0, 5.5 * px, 0);
+      const inner = orb(2.2 * px, 2.2 * px, 2.2 * px, 0xffffff, 0, 5.5 * px, -0.3 * px);
+      const glowL = orb(1 * px, 1.1 * px, 0.5 * px, 0x1d2b36, -1.2 * px, 5.9 * px, -2.2 * px);
+      const glowR = orb(1 * px, 1.1 * px, 0.5 * px, 0x1d2b36, 1.2 * px, 5.9 * px, -2.2 * px);
+      const halo = orb(8.6 * px, 0.7 * px, 8.6 * px, 0x8fd0ff, 0, 5.5 * px, 0);
+      const ring2 = orb(6.6 * px, 0.5 * px, 6.6 * px, 0xbfe6ff, 0, 4.6 * px, 0);
+      // tiny motes orbiting the orb
+      const motes = [];
+      for (let i = 0; i < 3; i++) {
+        const ang = i / 3 * Math.PI * 2;
+        const mo = orb(0.9 * px, 0.9 * px, 0.9 * px, i === 1 ? 0xffffff : 0x9fd8ff,
+          Math.cos(ang) * 3.4 * px, 6.1 * px, Math.sin(ang) * 3.4 * px);
+        mo.userData.ang = ang;
+        mo.userData.rad = 3.4 * px;
+        mo.userData.baseY = 6.1 * px;
+        motes.push(mo);
+      }
+      const tail = limb(0.9 * px, 3.4 * px, 0.9 * px, 0x9fd8ff, 0, 3.6 * px, 0);
+      tail.add(orb(1.3 * px, 1.8 * px, 1.3 * px, 0xbfe6ff, 0, -2.4 * px, 0));
+      tail.add(orb(0.7 * px, 2.6 * px, 0.7 * px, 0x8fc8ec, 0, -1.6 * px, 0.5 * px));
+      g.add(core, inner, glowL, glowR, halo, ring2, ...motes, tail);
+      g.userData.eyes = [glowL, glowR];
+      g.userData.halo = halo;
+      g.userData.haloBase = 5.5 * px;
+      g.userData.motes = motes;
+      g.userData.tail = tail;
+      g.userData.glow = [core, inner, halo, ring2];
       return g;
     },
   },
@@ -214,14 +341,25 @@ export const SPECIES = {
       const skull = 0xa8b58c, flesh = 0x6f8257, cloth = 0x4a5b3d;
 
       const torso = boxMesh(8 * px, TORSO, 4 * px, cloth, 0, hipY + TORSO / 2, 0);
+      // exposed ribs on the left of the chest, under torn cloth
+      const rib1 = boxMesh(1.2 * px, 0.8 * px, 0.8 * px, 0xc8d0b0, -4.4 * px, hipY + 7.6 * px, -2 * px);
+      const rib2 = boxMesh(1.2 * px, 0.8 * px, 0.8 * px, 0xc8d0b0, -4.4 * px, hipY + 6 * px, -2 * px);
+      const rib3 = boxMesh(1.2 * px, 0.8 * px, 0.8 * px, 0xb4bc98, -4.4 * px, hipY + 4.4 * px, -2 * px);
       const collar = boxMesh(8.4 * px, 2 * px, 4.4 * px, 0x3f4d34, 0, shoulderY - px, 0);
       const head = boxMesh(HEAD, HEAD, HEAD, skull, 0, shoulderY + HEAD / 2, 0);
+      // a torn hood slouches over the crown of the skull
+      const hood = boxMesh(8.6 * px, 3.4 * px, 8.6 * px, 0x3a4630, 0, shoulderY + HEAD - 1 * px, 0);
+      const hoodPeak = boxMesh(3.4 * px, 1.8 * px, 3.4 * px, 0x333e2a, 0, shoulderY + HEAD + 1.8 * px, 1.4 * px);
       const brow = boxMesh(8.2 * px, 1.5 * px, 1 * px, 0x54633f, 0, shoulderY + 5.6 * px, -4 * px);
       const jaw = boxMesh(5 * px, 1.6 * px, 1 * px, 0x3a4630, 0, shoulderY + 1.7 * px, -4 * px);
 
-      // arms hang from the shoulder; the AI swings them forward when chasing
+      // arms hang from the shoulder; the AI swings them forward when chasing.
+      // bare clawed hands dangle off the sleeves.
       const armL = limb(4 * px, TORSO, 4 * px, flesh, -6 * px, shoulderY, 0);
       const armR = limb(4 * px, TORSO, 4 * px, flesh, 6 * px, shoulderY, 0);
+      const handL = boxMesh(4.4 * px, 2.2 * px, 4.4 * px, skull, 0, -TORSO + 1 * px, -0.4 * px);
+      const handR = boxMesh(4.4 * px, 2.2 * px, 4.4 * px, skull, 0, -TORSO + 1 * px, -0.4 * px);
+      armL.add(handL); armR.add(handR);
       const legL = limb(4 * px, LEG, 4 * px, 0x3e4a34, -2 * px, hipY, 0);
       const legR = limb(4 * px, LEG, 4 * px, 0x3e4a34, 2 * px, hipY, 0);
 
@@ -233,11 +371,12 @@ export const SPECIES = {
       const tatterA = boxMesh(2 * px, 3 * px, 1 * px, 0x3f4d34, -3 * px, hipY + 2 * px, -2.2 * px);
       const tatterB = boxMesh(2 * px, 2 * px, 1 * px, 0x3f4d34, 3 * px, hipY + 4 * px, 2.2 * px);
 
-      g.add(torso, collar, head, brow, jaw, armL, armR, legL, legR, eyeL, eyeR, tatterA, tatterB);
+      g.add(torso, collar, head, hood, hoodPeak, brow, jaw, armL, armR, legL, legR,
+        eyeL, eyeR, tatterA, tatterB, rib1, rib2, rib3);
       g.userData.legs = [legL, legR];
       g.userData.arms = [armL, armR];
       g.userData.head = head;
-      g.userData.headParts = [brow, jaw, eyeL, eyeR];
+      g.userData.headParts = [hood, hoodPeak, brow, jaw, eyeL, eyeR];
       g.userData.glow = [eyeL, eyeR];
       g.userData.biped = true;
       return g;
@@ -261,6 +400,14 @@ export const SPECIES = {
       const head = boxMesh(5.5 * px, 4 * px, 4 * px, dark, 0, bodyY, -8 * px);
       const mandL = boxMesh(1.2 * px, 1.2 * px, 2 * px, 0x241d30, -1.6 * px, bodyY - 1.4 * px, -10.5 * px);
       const mandR = boxMesh(1.2 * px, 1.2 * px, 2 * px, 0x241d30, 1.6 * px, bodyY - 1.4 * px, -10.5 * px);
+      // twitching antennae up front
+      const antL = limb(0.7 * px, 3.4 * px, 0.7 * px, 0x241d30, -1.6 * px, bodyY + 3.6 * px, -8.6 * px);
+      const antR = limb(0.7 * px, 3.4 * px, 0.7 * px, 0x241d30, 1.6 * px, bodyY + 3.6 * px, -8.6 * px);
+      antL.rotation.x = 0.7; antR.rotation.x = 0.7;
+      antL.userData.baseX = 0.7; antR.userData.baseX = 0.7;
+      // silk spinnerets under the abdomen
+      const spinL = boxMesh(0.9 * px, 1 * px, 1.6 * px, 0x1d1826, -1.3 * px, bodyY - 2.6 * px, 5.6 * px);
+      const spinR = boxMesh(0.9 * px, 1 * px, 1.6 * px, 0x1d1826, 1.3 * px, bodyY - 2.6 * px, 5.6 * px);
 
       const legs = [];
       for (const side of [-1, 1]) {
@@ -279,10 +426,11 @@ export const SPECIES = {
         e.position.set(dx * px, bodyY + 0.8 * px, -10 * px);
         eyes.push(e); g.add(e);
       }
-      g.add(abdomen, carapace, ridge, thorax, head, mandL, mandR);
+      g.add(abdomen, carapace, ridge, thorax, head, mandL, mandR, antL, antR, spinL, spinR);
       g.userData.legs = legs;
       g.userData.head = head;
-      g.userData.headParts = [mandL, mandR, ...eyes];
+      g.userData.headParts = [mandL, mandR, antL, antR, ...eyes];
+      g.userData.antennae = [antL, antR];
       g.userData.eyes = eyes;
       g.userData.glow = eyes;
       g.userData.spider = true;
@@ -306,6 +454,7 @@ export const SPECIES = {
       const crown = boxMesh(4.6 * px, 1.2 * px, 4.6 * px, dark, 0, shoulderY + HEAD + 0.4 * px, 0);
 
       const crystalMat = new THREE.MeshBasicMaterial({ color: 0xc77bf5 });
+      const coreMat = new THREE.MeshBasicMaterial({ color: 0xe8b8ff });
       const shards = [];
       const layout = [
         [-4.4, 12.0, 1.6, 2.4, 0.45, 0.30],
@@ -313,6 +462,11 @@ export const SPECIES = {
         [0, 18.5, 0.3, 3.2, 0.10, 0],
         [-3.2, 7.5, -3.0, 2.1, 0.30, 0.55],
         [3.0, 8.0, 3.6, 2.4, -0.28, -0.45],
+        // shoulder spikes + knee shards
+        [-5.6, 9.6, 0, 2.0, 0.8, 0.2],
+        [5.6, 9.6, 0, 2.0, -0.8, -0.2],
+        [-2.4, 2.4, -1.2, 1.5, 0.2, 0.6],
+        [2.4, 2.4, -1.2, 1.5, -0.2, -0.6],
       ];
       for (const [dx, dy, dz, sc, rx, rz] of layout) {
         const c = new THREE.Mesh(
@@ -331,15 +485,61 @@ export const SPECIES = {
       const eye = new THREE.Mesh(new THREE.BoxGeometry(3.4 * px, 1.2 * px, px),
         new THREE.MeshBasicMaterial({ color: 0xe8b8ff }));
       eye.position.set(0, shoulderY + 2.8 * px, -2.6 * px);
+      // a glowing heart-crystal set into the chest plate
+      const heart = new THREE.Mesh(new THREE.BoxGeometry(2.6 * px, 3.4 * px, 2 * px), coreMat);
+      heart.position.set(0, hipY + 5.2 * px, -3.2 * px);
+      const heartShard = new THREE.Mesh(new THREE.BoxGeometry(1.4 * px, 1.8 * px, 1 * px), crystalMat);
+      heartShard.position.set(0, hipY + 5.2 * px, -4.2 * px);
 
-      g.add(torso, plate, head, crown, armL, armR, legL, legR, eye);
+      g.add(torso, plate, head, crown, armL, armR, legL, legR, eye, heart, heartShard);
       g.userData.legs = [legL, legR];
       g.userData.arms = [armL, armR];
       g.userData.shards = shards;
+      g.userData.heart = heart;
       g.userData.head = head;
       g.userData.headParts = [crown, eye];
-      g.userData.glow = [eye];
+      g.userData.glow = [eye, heart];
       g.userData.biped = true;
+      return g;
+    },
+  },
+  emberling: {
+    friendly: false, hp: 12, speed: 2.6, w: 0.55, h: 0.7, view: 16, dmg: 3, floater: true,
+    drops: [['ember_dust', 2, 3], ['coal', 0, 1]], xp: 5,
+    build: () => {
+      // A fistful of fire given spite: blackened core shot through with
+      // glowing cracks, wrapped in flickering flame tongues.
+      const g = new THREE.Group();
+      const px = 1 / 16;
+      const bodyY = 6 * px;
+      const core = boxMesh(5.6 * px, 5.6 * px, 5.6 * px, 0x1d1510, 0, bodyY, 0);
+      const crackM = new THREE.MeshBasicMaterial({ color: 0xffb648 });
+      const cracks = [];
+      for (const [dx, dy, dz] of [[0, 0, -3], [0, 0, 3], [-3, 0, 0], [3, 0, 0], [0, -3, 0], [0, 3, 0]]) {
+        const c = new THREE.Mesh(new THREE.BoxGeometry(1.4 * px, 1.4 * px, 1.4 * px), crackM);
+        c.position.set(dx * px, bodyY + dy * px, dz * px);
+        cracks.push(c); g.add(c);
+      }
+      const flameM = new THREE.MeshBasicMaterial({ color: 0xff7a2a, transparent: true, opacity: 0.85 });
+      const flames = [];
+      for (let i = 0; i < 6; i++) {
+        const ang = i / 6 * Math.PI * 2;
+        const f = new THREE.Mesh(new THREE.BoxGeometry(2 * px, 4.4 * px, 2 * px), flameM);
+        f.position.set(Math.cos(ang) * 3.2 * px, bodyY + 1.4 * px, Math.sin(ang) * 3.2 * px);
+        f.rotation.y = -ang;
+        f.userData.base = f.position.clone();
+        f.userData.ph = i * 1.7;
+        flames.push(f); g.add(f);
+      }
+      const halo = new THREE.Mesh(new THREE.BoxGeometry(9 * px, 0.8 * px, 9 * px),
+        new THREE.MeshBasicMaterial({ color: 0xff8a2a, transparent: true, opacity: 0.35 }));
+      halo.position.y = bodyY + 3.6 * px;
+      g.add(core, halo);
+      g.userData.cracks = cracks;
+      g.userData.flames = flames;
+      g.userData.halo = halo;
+      g.userData.haloBase = bodyY + 3.6 * px;
+      g.userData.glow = [...cracks, ...flames];
       return g;
     },
   },
@@ -369,6 +569,12 @@ export const SPECIES = {
         t.userData.phase = Math.abs(dx * 0.7 + dz * 1.1);
         tendrils.push(t); g.add(t);
       }
+      // two ragged cloth tatters that sway independently of the tendrils
+      const tatterM = new THREE.Mesh(new THREE.BoxGeometry(2.2 * px, 6.4 * px, 0.6 * px),
+        new THREE.MeshLambertMaterial({ color: 0x241d33, transparent: true, opacity: 0.55 }));
+      tatterM.position.set(-3.6 * px, bodyY - 2 * px, 2 * px);
+      const tatterN = tatterM.clone();
+      tatterN.position.set(3.8 * px, bodyY - 1.2 * px, -1.6 * px);
       const eyeMat = new THREE.MeshBasicMaterial({ color: 0x8ad8ff });
       const eyes = [];
       for (const dx of [-2, 2]) {
@@ -376,8 +582,9 @@ export const SPECIES = {
         e.position.set(dx * px, bodyY + 1.2 * px, -4.2 * px);
         eyes.push(e); g.add(e);
       }
-      g.add(core, cap, shroud, halo);
+      g.add(core, cap, shroud, halo, tatterM, tatterN);
       g.userData.tendrils = tendrils;
+      g.userData.tatters = [tatterM, tatterN];
       g.userData.eyes = eyes;
       g.userData.halo = halo;
       g.userData.shroud = shroud;
@@ -540,6 +747,32 @@ export class Entity {
     if (dist > 84) { this.despawnT += dt; if (this.despawnT > 6) this.dead = true, this.despawned = true; }
     else this.despawnT = 0;
 
+    // wisps melt away at dawn with a puff of light
+    if (d.shy && ctx.daylight > 0.52 && !this._shyGone) {
+      this._shyGone = true;
+      if (ctx.particles) ctx.particles.burst(this.pos.x, this.pos.y + this.h * 0.5, this.pos.z, 0x9fd8ff, 10, 1.2, 0.06, 0.7);
+      this.dead = true;
+      this.despawned = true;
+    }
+
+    // emberlings shed sparks as they drift
+    if (this.kind === 'emberling' && ctx.particles && Math.random() < dt * 7) {
+      ctx.particles.spawn(
+        this.pos.x + (Math.random() - 0.5) * 0.4,
+        this.pos.y + this.h * 0.3 + (Math.random() - 0.5) * 0.3,
+        this.pos.z + (Math.random() - 0.5) * 0.4,
+        (Math.random() - 0.5) * 0.4, 0.4 + Math.random() * 0.6, (Math.random() - 0.5) * 0.4,
+        Math.random() < 0.5 ? 0xffb648 : 0xff7a2a, 0.05, 0.8, -0.1);
+    }
+    // wisps leave a faint trail of light
+    if (this.kind === 'wisp' && ctx.particles && Math.random() < dt * 4) {
+      ctx.particles.spawn(
+        this.pos.x + (Math.random() - 0.5) * 0.3,
+        this.pos.y + this.h * 0.4,
+        this.pos.z + (Math.random() - 0.5) * 0.3,
+        0, 0.15, 0, 0xbfe6ff, 0.045, 1.2, 0);
+    }
+
     // ambient voice
     if (this.soundCd <= 0 && dist < 22) {
       this.soundCd = 7 + Math.random() * 14;
@@ -561,6 +794,8 @@ export class Entity {
     const d = this.def;
     // flee if recently hurt
     if (this.hurtT > 0 && this.fleeT === undefined) this.fleeT = 3.2;
+    // skittish species bolt when a player gets too close (foxes, wisps)
+    if (d.skittish && this.fleeT === undefined && dist < (d.fleeRange || 6)) this.fleeT = 2.6;
     if (this.fleeT > 0) {
       this.fleeT -= dt;
       // face the way we are fleeing: yaw convention here is
@@ -888,6 +1123,65 @@ export class Entity {
       ud.wings[0].rotation.x = sweep;
       ud.wings[1].rotation.x = sweep;
     }
+    if (ud.wings2) {
+      // the secondary feather layer trails a beat behind the primary wing
+      ud.wings2.forEach((w, i) => {
+        w.rotation.z = (ud.wings[i] ? ud.wings[i].rotation.z : 0) * 0.55;
+        w.rotation.x = (ud.wings[i] ? ud.wings[i].rotation.x : 0) * 0.6;
+      });
+    }
+
+    if (ud.antennae) {
+      // creeplet antennae twitch out to the sides, faster when hunting
+      const sp = this.state === 'chase' ? 9 : 3.4;
+      ud.antennae.forEach((a, i) => {
+        const base = a.userData.baseX || 0.7;
+        a.rotation.x = base + Math.sin(t * sp + i * 2.2) * 0.28;
+        a.rotation.z = (i === 0 ? 1 : -1) * Math.sin(t * sp * 0.8) * 0.22;
+      });
+    }
+
+    if (ud.cracks) {
+      // emberling cracks pulse with heat
+      ud.cracks.forEach((c, i) => {
+        c.scale.setScalar(0.75 + 0.45 * Math.abs(Math.sin(t * 6 + i * 1.9)));
+      });
+    }
+    if (ud.flames) {
+      // flame tongues lick and sway around the core
+      ud.flames.forEach((f, i) => {
+        f.rotation.y += dt * 2.4;
+        const s = 1 + Math.sin(t * 9 + f.userData.ph) * 0.24;
+        f.scale.set(s, 1 + Math.sin(t * 7 + f.userData.ph * 1.3) * 0.35, s);
+        f.position.copy(f.userData.base);
+        f.position.x += Math.sin(t * 5 + f.userData.ph) * 0.03;
+        f.position.z += Math.cos(t * 4.6 + f.userData.ph) * 0.03;
+      });
+    }
+
+    if (ud.tatters) {
+      // gloom's cloth rags sway slowly, out of phase with the tendrils
+      ud.tatters.forEach((ta, i) => {
+        ta.rotation.x = Math.sin(t * 1.3 + i * 2.4) * 0.3;
+        ta.rotation.z = Math.cos(t * 1.1 + i * 1.7) * 0.24;
+      });
+    }
+    if (ud.heart) {
+      // the shardling's heart-crystal breathes
+      const hs = 1 + Math.sin(t * 3.2) * 0.12;
+      ud.heart.scale.set(hs, hs * 1.05, 1);
+    }
+
+    if (ud.motes) {
+      // wisps' orbiting sparks
+      ud.motes.forEach((mo, i) => {
+        mo.userData.ang += dt * (1.6 + i * 0.5);
+        mo.position.set(
+          Math.cos(mo.userData.ang) * mo.userData.rad,
+          mo.userData.baseY + Math.sin(t * 2.2 + i * 2.1) * 0.9 * 0.0625,
+          Math.sin(mo.userData.ang) * mo.userData.rad);
+      });
+    }
 
     if (ud.arms) {
       // NOTE ON SIGNS: a limb pivot hangs downward (-Y), so a POSITIVE
@@ -972,7 +1266,10 @@ export class Entity {
     }
     if (ud.halo) {
       ud.halo.rotation.y += dt * 0.7;
-      ud.halo.position.y = 0.86 + Math.sin(t * 1.8) * 0.05;
+      // each species hovers its halo at its own height (gloom floats high,
+      // the wisp and emberling hug their bodies)
+      const base = ud.haloBase !== undefined ? ud.haloBase : 0.86;
+      ud.halo.position.y = base + Math.sin(t * 1.8) * 0.05;
     }
     if (ud.shroud) {
       const p = 1 + Math.sin(t * 1.6) * 0.035;
@@ -1047,21 +1344,33 @@ export class Entity {
 // -------------------------------------------------------------- spawn logic
 export function pickSpawnKind(biome, y, daylight, underground, deep) {
   const roll = Math.random();
+  // deep night: wisps drift out of the woods before the hostile roll, so a
+  // forest at 1am is as likely to shimmer as it is to shuffle
+  if (!underground && daylight < 0.16 && roll < 0.22) {
+    const wispy = [BIOME.FOREST, BIOME.MEADOW, BIOME.PLAINS, BIOME.MARSH];
+    if (wispy.includes(biome)) return 'wisp';
+  }
   if (underground) {
-    if (deep && roll < 0.34) return 'gloom';
-    if (roll < 0.5) return 'shardling';
-    if (roll < 0.78) return 'creeplet';
+    // emberlings haunt the lava pockets near the floor of the deep
+    if (roll < 0.14) return 'emberling';
+    if (deep && roll < 0.42) return 'gloom';
+    if (roll < 0.62) return 'shardling';
+    if (roll < 0.84) return 'creeplet';
     return 'husk';
   }
   if (daylight < 0.3) {
-    if (roll < 0.52) return 'husk';
-    if (roll < 0.86) return 'creeplet';
-    return 'shardling';
+    if (roll < 0.40) return 'husk';
+    if (roll < 0.70) return 'creeplet';
+    if (roll < 0.82) return 'shardling';
+    // the grove burns brightest after dark
+    if (biome === BIOME.EMBERWOOD && roll < 0.92) return 'emberling';
+    return 'husk';
   }
   const friendly = [];
   for (const k in SPECIES) {
     const s = SPECIES[k];
     if (!s.friendly) continue;
+    if (s.shy) continue;                 // wisps only emerge at night
     if (s.biomes && !s.biomes.includes(biome)) continue;
     friendly.push(k);
   }

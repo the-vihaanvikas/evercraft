@@ -15,6 +15,17 @@
 <!-- ------------------------------------------------------------- title -->
 <div id="title">
   <canvas id="titleCanvas"></canvas>
+  <div id="titleVignette"></div>
+  <!-- cinematic boot sting: the wordmark slams in over black, then the
+       camera flyover fades up underneath it -->
+  <div id="boot">
+    <div class="bootlogo">
+      <b>EVERCRAFT</b>
+      <em>VOXEL SURVIVAL SANDBOX</em>
+    </div>
+    <div class="boothint">Click to skip</div>
+  </div>
+  <div id="bootFlash"></div>
   <div id="titleInner">
     <h1 class="logo">EVERCRAFT<em>VOXEL SURVIVAL SANDBOX</em></h1>
     <div class="splash" id="splash">Dig deeper!</div>
@@ -131,6 +142,7 @@
 <!-- ----------------------------------------------------------- loading -->
 <div id="loading" class="hidden">
   <div class="loadlogo">EVERCRAFT</div>
+  <div class="loadcube" aria-hidden="true"><i></i><i></i><i></i></div>
   <div class="loadbar"><i id="loadFill"></i></div>
   <div class="loadtip" id="loadTip">Shaping the world…</div>
 </div>

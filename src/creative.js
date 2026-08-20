@@ -26,6 +26,7 @@ const OVERRIDE = {
   bed: 'deco', torch: 'redstone', torch_item: 'redstone', lantern: 'redstone',
   lumen: 'redstone', hearth: 'redstone',
   door_aspen: 'redstone', door_ember: 'redstone', door_pine: 'redstone', door_palm: 'redstone',
+  fence_aspen: 'building', fence_ember: 'building', fence_pine: 'building', fence_palm: 'building',
   // second-wave building stock
   mossy_bricks: 'building', cracked_bricks: 'building', smooth_stone: 'building',
   chiseled_sandstone: 'building', thatch: 'building', timber_frame: 'building',

@@ -17,6 +17,11 @@ function getChunk(cx, cz) {
   const r = gen.generateChunk(cx, cz);
   chunks.set(k, r.blocks);
   meta.set(k, { heights: r.heights, biomes: r.biomes });
+  // Saved edits must land on a chunk the very first time it is generated,
+  // whichever code path generated it. Previously they were only applied in
+  // the 'gen' handler, so a chunk that first appeared as a mesh neighbour
+  // (e.g. loaded via ensureNeighbours) could come up WITHOUT its edits.
+  applyPending(cx, cz, r.blocks);
   return r.blocks;
 }
 
@@ -40,10 +45,8 @@ self.onmessage = (e) => {
     case 'gen': {
       const { cx, cz, id } = m;
       const k = key(cx, cz);
-      let fresh = !chunks.has(k);
       const blocks = getChunk(cx, cz);
       if (!blocks) break;
-      if (fresh) applyPending(cx, cz, blocks);
       const md = meta.get(k);
       const copy = blocks.slice();
       self.postMessage({

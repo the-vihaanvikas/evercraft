@@ -195,7 +195,6 @@ export class Audio {
     this.tone(open ? 260 : 200, 0.2, 'sawtooth', 0.06, open ? 60 : -50);
   }
   hitEntity() { this.noiseBurst(0.09, 500, 1.2, 0.24); this.tone(180, 0.1, 'square', 0.12, -70); }
-  levelUp() { [523, 659, 784, 1046].forEach((f, i) => this.tone(f, 0.24, 'triangle', 0.13, 0, i * 0.09)); }
   splash() { this.noiseBurst(0.35, 1200, 0.5, 0.24, 'lowpass'); this.noiseBurst(0.2, 2600, 0.6, 0.10, 'highpass', 0.03); }
   fizz() { this.noiseBurst(0.6, 1800, 0.4, 0.16, 'highpass'); }
   eat() { for (let i = 0; i < 3; i++) this.noiseBurst(0.08, 300, 1.6, 0.13, 'lowpass', i * 0.13); }
@@ -219,6 +218,57 @@ export class Audio {
     this.noiseBurst(0.7, 180, 0.5, 0.5, 'lowpass');
     this.noiseBurst(0.4, 900, 0.6, 0.3);
     this.tone(70, 0.6, 'sine', 0.3, -30);
+  }
+
+  /** Gentle music-box lullaby for the sleep cinematic. */
+  sleep() {
+    if (!this.ctx || !this.enabled) return;
+    const notes = [523.25, 587.33, 659.25, 783.99, 659.25, 587.33, 523.25, 392.0];
+    const t0 = this.ctx.currentTime + 0.08;
+    notes.forEach((f, i) => {
+      this.tone(f, 0.9, 'sine', 0.05, 0, 0.25 + i * 0.34);
+      this.tone(f * 2, 0.5, 'sine', 0.022, 0, 0.25 + i * 0.34);
+    });
+    // deep sleep drone underneath
+    this.tone(98, 6.5, 'sine', 0.028, -6, 0.15);
+  }
+
+  /** Slow, solemn descent for the death cinematic. */
+  death() {
+    if (!this.ctx || !this.enabled) return;
+    this.tone(220, 1.1, 'sine', 0.14, -90);
+    this.tone(110, 1.6, 'sine', 0.12, -40, 0.12);
+    this.noiseBurst(1.4, 140, 0.5, 0.10, 'lowpass', 0.1);
+    // distant bell
+    this.tone(440, 2.2, 'sine', 0.05, -4, 0.5);
+    this.tone(659.25, 2.4, 'sine', 0.035, -5, 0.72);
+  }
+
+  /** Soft chime for a level-up (extends the old single arpeggio). */
+  levelUp() { [523, 659, 784, 1046, 1318].forEach((f, i) => this.tone(f, 0.26, 'triangle', 0.12, 0, i * 0.085)); }
+
+  /**
+   * Title-screen theme: a slow, hopeful motif that loops while the menu sits
+   * over the flyover. `warm` (0..1) blends the arpeggio register.
+   */
+  menuTick(bar) {
+    if (!this.ctx || !this.enabled) return;
+    const t0 = this.ctx.currentTime;
+    const root = 261.63;                       // C4
+    const prog = [[0, 4, 7, 12], [5, 9, 12, 17], [3, 7, 10, 15], [4, 9, 12, 16]];
+    const chord = prog[bar % 4];
+    const semi = n => Math.pow(2, n / 12);
+    // warm pad
+    chord.forEach((d, i) => {
+      this.tone(root * semi(d) * 0.5, 3.4, 'sine', 0.024, 0, 0);
+      this.tone(root * semi(d) * 0.5, 3.4, 'sine', 0.02, 0, 0.02);
+    });
+    // gentle arpeggio on the off-beats
+    const offs = [0.5, 1.0, 1.5, 2.5, 3.0];
+    offs.forEach((o, i) => {
+      const d = chord[i % chord.length];
+      this.tone(root * semi(d) * 2, 0.8, 'triangle', 0.034, 0, o);
+    });
   }
 
   // ------------------------------------------------------------------ music

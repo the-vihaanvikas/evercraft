@@ -1782,6 +1782,58 @@ check('the chest screen fits on screen', layout.chestFits, 'fits');
 check('the creative palette fits on screen', layout.creativeFits && layout.creativeScrolls, 'fits');
 check('the recipe book icon sits left of the inventory grid', layout.bookLeftOfGrid, 'left');
 
+// ---- Round 7: cinematic title, death cinematic, fences & new mobs --------
+console.log('\n[round 7: cinematics, fences & new species]');
+const r7 = await page.evaluate(async () => {
+  const out = {};
+  const { Game } = await import('/src/game.js');
+  const { SPECIES } = await import('/src/entities.js');
+  const { ITEM, BLOCKS, B } = await import('/src/blocks.js');
+  const { RECIPES } = await import('/src/recipes.js');
+  const { CREATIVE_PALETTE } = await import('/src/creative.js');
+  const { TILE_NAMES } = await import('/src/textures.js');
+
+  // death cinematic: staged, with a fall and a red-out
+  out.deathStages = Game.DEATH_STAGES.map(s => s.key).join('>');
+  out.deathStaged = Game.DEATH_STAGES.length >= 3 &&
+    Game.DEATH_STAGES[0].dur > 0 && Game.DEATH_STAGES[1].dur > 0;
+
+  // fences: four woods, textured, craftable, in the palette, with posts+rails
+  const tiles = new Set(TILE_NAMES);
+  const fenceIds = ['fence_aspen', 'fence_ember', 'fence_pine', 'fence_palm'];
+  out.fenceMissing = fenceIds.filter(i => !ITEM[i]);
+  out.fenceNoTex = fenceIds.filter(i => {
+    const b = BLOCKS[ITEM[i]?.block];
+    return !b || !b.tex || !tiles.has(b.tex);
+  });
+  out.fenceNoRecipe = fenceIds.filter(i => !RECIPES.some(r => r.out === i));
+  out.fencePalette = fenceIds.every(i => Object.values(CREATIVE_PALETTE).flat().includes(i));
+  out.fenceMesh = !!BLOCKS[B.FENCE_ASPEN] && BLOCKS[B.FENCE_ASPEN].render === 8;
+
+  // new species exist and build multi-part models
+  out.newKinds = ['fennix', 'wisp', 'emberling'].filter(k => SPECIES[k]);
+  const { Entity } = await import('/src/entities.js');
+  const parts = {};
+  for (const k of ['fennix', 'wisp', 'emberling']) {
+    const e = new Entity(k, 0, 0, 0);
+    const m = e.buildMesh();
+    let n = 0;
+    m.traverse(o => { if (o.isMesh) n++; });
+    parts[k] = n;
+  }
+  out.parts = parts;
+  out.partsOk = Object.entries(parts).every(([, n]) => n >= 10);
+  return out;
+});
+check('death runs a staged cinematic (fall, darken, end)', r7.deathStaged, r7.deathStages);
+check('all four fence woods are registered', r7.fenceMissing.length === 0, r7.fenceMissing.join(',') || 'all');
+check('fences are textured', r7.fenceNoTex.length === 0, r7.fenceNoTex.join(',') || 'all');
+check('fences are craftable', r7.fenceNoRecipe.length === 0, r7.fenceNoRecipe.join(',') || 'all');
+check('fences appear in the creative palette', r7.fencePalette);
+check('fences use the post-and-rail mesh class', r7.fenceMesh);
+check('fennix, wisp and emberling are registered and multi-part',
+  r7.newKinds.length === 3 && r7.partsOk, JSON.stringify(r7.parts));
+
 await browser.close();
 console.log(`\n=== ${ok.length} passed, ${fails.length} failed ===`);
 if (errors.length) { console.log('console errors:'); errors.slice(0, 12).forEach(e => console.log('  !', e.slice(0, 300))); }

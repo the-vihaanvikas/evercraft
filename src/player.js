@@ -116,6 +116,8 @@ export class Player {
     this.lastDamage = 0;
     this.spawnPoint = null;
     this.deaths = 0;
+    this.deathCause = null;
+    this.landed = false;       // set for one frame after a hard landing
     this.stats = { mined: 0, placed: 0, crafted: 0, killed: 0, distance: 0, deepest: 999 };
     this.fallStart = null;
     this.dead = false;
@@ -288,6 +290,7 @@ export class Player {
     this._moveAxis(dt, 'y');
 
     // fall damage
+    this.landed = false;
     if (!this.onGround && this.vel.y < -0.1 && this.fallStart === null) this.fallStart = prevY;
     if (this.onGround && this.fallStart !== null) {
       const dist = this.fallStart - this.pos.y;
@@ -298,6 +301,7 @@ export class Player {
       if (dist > 0.6) {
         const gid = this.world.getBlock(this.pos.x, this.pos.y - 0.2, this.pos.z);
         this.audio.land(matOf(gid));
+        this.landed = true;   // lets the game kick up a dust puff
       }
       this.fallStart = null;
     }
@@ -461,16 +465,18 @@ export class Player {
     this.hurtCd = 0.42;
     this.lastDamage = performance.now();
     this.audio.hurt();
-    if (this.health <= 0) { this.health = 0; this.die(); }
+    if (this.health <= 0) { this.health = 0; this.die(cause); }
   }
 
-  die() {
+  die(cause) {
     this.dead = true;
     this.deaths++;
+    this.deathCause = cause || this.deathCause || 'The world claimed you.';
   }
 
   respawn(spawn) {
     this.dead = false;
+    this.deathCause = null;
     this.health = this.maxHealth;
     this.hunger = Math.max(6, this.hunger);
     this.saturation = 2;
@@ -569,7 +575,7 @@ export function matOf(id) {
     case B.WATER: return 'water';
     default: break;
   }
-  if (b.tool === 'axe' || b.wood) return 'wood';
+  if (b.tool === 'axe' || b.wood || b.fenceWood) return 'wood';
   if (b.tool === 'shovel') return 'dirt';
   if (b.tool === 'shears') return 'wool';
   if (id >= B.ORE_COPPER && id <= B.ORE_GLIMMER) return 'metal';

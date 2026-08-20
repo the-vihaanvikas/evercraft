@@ -51,17 +51,58 @@ kbd{
   overflow:auto;
   image-rendering:pixelated;
   font-family:var(--pixel);
+  transition:background 1.2s ease;
 }
+/* once the boot sting ends the backdrop goes transparent so the 3D
+   flyover renders through it */
+#title.live{background:transparent}
 #titleCanvas{position:absolute;inset:0;width:100%;height:100%;opacity:1;image-rendering:pixelated}
 /* dim vignette so the menu stays readable over the animated backdrop */
-#title::after{
-  content:'';position:absolute;inset:0;z-index:1;pointer-events:none;
-  background:radial-gradient(130% 100% at 50% 42%, rgba(6,9,14,0) 0%, rgba(6,9,14,.28) 62%, rgba(6,9,14,.58) 100%);
+#titleVignette{position:absolute;inset:0;z-index:1;pointer-events:none;opacity:0;transition:opacity 1.6s ease;
+  background:radial-gradient(130% 100% at 50% 42%, rgba(6,9,14,0) 0%, rgba(6,9,14,.22) 58%, rgba(6,9,14,.55) 100%);}
+#title.live #titleVignette{opacity:1}
+
+/* ---- boot sting: wordmark slams in over black, then the world fades up -- */
+#boot{
+  position:absolute;inset:0;z-index:3;display:flex;align-items:center;justify-content:center;
+  background:#05070c;transition:opacity .7s ease;pointer-events:none;
 }
+#boot.gone{opacity:0}
+.bootlogo{text-align:center;animation:bootBreath 1.6s ease-in-out infinite}
+.bootlogo b{
+  display:block;font-weight:400;font-size:clamp(44px,9vw,96px);letter-spacing:.08em;
+  color:#e9c93d;text-shadow:
+    4px 0 0 #6b4d05,-4px 0 0 #6b4d05,0 4px 0 #6b4d05,0 -4px 0 #6b4d05,
+    4px 4px 0 #6b4d05,-4px 4px 0 #6b4d05,4px -4px 0 #6b4d05,-4px -4px 0 #6b4d05,
+    0 10px 0 rgba(0,0,0,.6);
+  animation:logoSting .9s cubic-bezier(.16,1.3,.3,1) both;
+}
+.bootlogo em{
+  display:block;font-style:normal;margin-top:18px;font-size:clamp(9px,1.6vw,15px);
+  letter-spacing:.46em;color:#9fb0c8;text-shadow:2px 2px 0 #10141d;
+  animation:bootSub .9s ease .35s both;
+}
+@keyframes logoSting{0%{transform:scale(2.6);opacity:0;filter:brightness(3)}60%{transform:scale(.94);opacity:1;filter:brightness(1.6)}100%{transform:scale(1);opacity:1;filter:brightness(1)}}
+@keyframes bootSub{0%{opacity:0;transform:translateY(14px);letter-spacing:.8em}100%{opacity:1;transform:none;letter-spacing:.46em}}
+@keyframes bootBreath{0%,100%{transform:scale(1)}50%{transform:scale(1.012)}}
+.boothint{
+  position:absolute;bottom:26px;left:50%;transform:translateX(-50%);
+  font-size:10px;color:#5f6b80;letter-spacing:.2em;animation:bootSub 1s ease 1.6s both;
+}
+#bootFlash{position:absolute;inset:0;z-index:4;background:#fffdf2;opacity:0;pointer-events:none}
+#bootFlash.play{animation:bootFlash 1.1s ease-out}
+@keyframes bootFlash{0%{opacity:0}22%{opacity:.95}100%{opacity:0}}
 #titleInner{
   position:relative;z-index:2;width:min(880px,94vw);text-align:center;
   padding:28px 0 34px;
+  opacity:0;transform:translateY(30px);
+  transition:opacity 1.1s ease,transform 1.1s cubic-bezier(.18,.9,.24,1);
 }
+#titleInner.show{opacity:1;transform:none}
+#titleInner.show .logo{animation:logoDrop .95s cubic-bezier(.2,1.4,.3,1) both,logoBob 3.6s ease-in-out 1s infinite}
+@keyframes logoDrop{0%{opacity:0;transform:translateY(-34px) scale(1.06)}100%{opacity:1;transform:none}}
+#titleInner.show .menu-card{animation:cardUp .8s cubic-bezier(.2,.9,.25,1) .18s both}
+@keyframes cardUp{0%{opacity:0;transform:translateY(26px)}100%{opacity:1;transform:none}}
 
 /* ---- logo: chunky pixel wordmark with a hard drop shadow ---- */
 .logo{
@@ -243,8 +284,13 @@ kbd{
 #ui{position:fixed;inset:0;pointer-events:none;z-index:10;}
 #crosshair{
   position:absolute;left:50%;top:50%;transform:translate(-50%,-50%);
-  opacity:.9;mix-blend-mode:difference;
+  opacity:.9;mix-blend-mode:difference;transition:opacity .15s;
 }
+#crosshair svg{transition:transform .12s ease}
+#crosshair svg path{transition:stroke .15s}
+#crosshair.interact{mix-blend-mode:normal}
+#crosshair.interact svg{transform:scale(1.22)}
+#crosshair.interact svg path{stroke:#ffd76a !important}
 body.modal #crosshair{display:none}
 
 #hud{position:absolute;left:0;right:0;bottom:0;padding:0 0 14px;display:flex;
@@ -367,15 +413,37 @@ body.modal #crosshair{display:none}
 #sleepCinema .sleepcap.pop{animation:capIn .55s ease-out}
 @keyframes capIn{from{opacity:0;transform:translateX(-50%) translateY(8px)}to{opacity:1;transform:translateX(-50%)}}
 body.sleeping #crosshair,body.sleeping #hint,body.sleeping #hud{opacity:0;transition:opacity .5s}
+body.dying #crosshair,body.dying #hint,body.dying #hud{opacity:0;transition:opacity .8s}
 
-#deathScreen{position:absolute;inset:0;background:rgba(60,8,4,.55);display:flex;align-items:center;
-  justify-content:center;pointer-events:auto;backdrop-filter:blur(6px)}
+/* the red veil that closes over the world during the death cinematic */
+#deathFade{position:absolute;inset:0;background:radial-gradient(circle at 50% 46%,#2b0703 0%,#4a0c06 62%,#140201 100%);
+  opacity:0;pointer-events:none;z-index:5;transition:opacity .08s linear}
+#deathCap{position:fixed;left:50%;bottom:24%;transform:translateX(-50%);z-index:210;
+  font:700 15px inherit;letter-spacing:.16em;text-transform:uppercase;text-align:center;
+  color:#ffb0a0;text-shadow:0 2px 12px #000,0 0 26px rgba(200,40,20,.45);
+  opacity:0;transition:opacity .3s;pointer-events:none;font-family:var(--pixel)}
+#deathCap.pop{animation:deathCapIn .55s ease-out}
+@keyframes deathCapIn{from{opacity:0;transform:translateX(-50%) translateY(10px)}to{opacity:1;transform:translateX(-50%)}}
+
+#deathScreen{position:absolute;inset:0;background:rgba(40,5,2,.62);display:flex;align-items:center;
+  justify-content:center;pointer-events:auto;backdrop-filter:blur(7px);animation:deathScreenIn .8s ease both}
 #deathScreen.hidden{display:none}
-.dbox{text-align:center;background:rgba(18,12,14,.9);border:1px solid #6d2f28;border-radius:16px;
-  padding:40px 52px;box-shadow:0 20px 60px rgba(0,0,0,.6)}
-.dbox h1{font-size:44px;letter-spacing:.1em;color:#ff8878;margin-bottom:10px;
-  text-shadow:0 4px 0 rgba(0,0,0,.4)}
-.dbox p{color:#d0a8a0;margin-bottom:26px;font-size:14px}
+@keyframes deathScreenIn{from{opacity:0;backdrop-filter:blur(0)}to{opacity:1;backdrop-filter:blur(7px)}}
+.dbox{text-align:center;background:rgba(16,10,11,.94);border:1px solid #7d3328;border-radius:18px;
+  padding:44px 58px;box-shadow:0 24px 70px rgba(0,0,0,.7), inset 0 0 0 4px rgba(120,30,20,.25);
+  animation:dboxIn .6s cubic-bezier(.2,1.1,.3,1) .15s both}
+@keyframes dboxIn{from{opacity:0;transform:translateY(18px) scale(.94)}to{opacity:1;transform:none}}
+.dbox h1{font-size:46px;letter-spacing:.12em;color:#ff8878;margin-bottom:12px;
+  text-shadow:0 4px 0 rgba(0,0,0,.5),0 0 30px rgba(255,90,60,.25);font-family:var(--pixel);font-weight:400}
+.dbox p{color:#d8aca4;margin-bottom:26px;font-size:14px}
+.dbox .dstats{margin-top:16px;font:9.5px var(--pixel);color:#a07068;letter-spacing:.06em;line-height:2}
+/* pixel-art skull above the title */
+.dskull{
+  width:44px;height:44px;margin:0 auto 18px;image-rendering:pixelated;
+  background-image:url("data:image/svg+xml;utf8,<svg xmlns='http://www.w3.org/2000/svg' viewBox='0 0 11 11' shape-rendering='crispEdges'><rect x='2' y='1' width='7' height='1' fill='%23e8e2d4'/><rect x='1' y='2' width='1' height='1' fill='%23c9c2b0'/><rect x='2' y='2' width='1' height='1' fill='%23f7f3e8'/><rect x='3' y='2' width='5' height='1' fill='%23e8e2d4'/><rect x='8' y='2' width='1' height='1' fill='%23c9c2b0'/><rect x='9' y='2' width='1' height='1' fill='%23e8e2d4'/><rect x='0' y='3' width='1' height='1' fill='%23c9c2b0'/><rect x='1' y='3' width='2' height='3' fill='%23120d0d'/><rect x='3' y='3' width='5' height='3' fill='%23e8e2d4'/><rect x='8' y='3' width='2' height='3' fill='%23120d0d'/><rect x='10' y='3' width='1' height='1' fill='%23c9c2b0'/><rect x='1' y='6' width='1' height='1' fill='%23c9c2b0'/><rect x='2' y='6' width='7' height='1' fill='%23f7f3e8'/><rect x='9' y='6' width='1' height='1' fill='%23c9c2b0'/><rect x='2' y='7' width='7' height='1' fill='%23e8e2d4'/><rect x='2' y='8' width='1' height='1' fill='%23c9c2b0'/><rect x='3' y='8' width='1' height='1' fill='%23f7f3e8'/><rect x='4' y='8' width='3' height='1' fill='%23e8e2d4'/><rect x='7' y='8' width='1' height='1' fill='%23f7f3e8'/><rect x='8' y='8' width='1' height='1' fill='%23c9c2b0'/><rect x='4' y='9' width='1' height='1' fill='%23c9c2b0'/><rect x='5' y='9' width='1' height='1' fill='%23f7f3e8'/><rect x='6' y='9' width='1' height='1' fill='%23c9c2b0'/><rect x='5' y='10' width='1' height='1' fill='%23c9c2b0'/></svg>");
+  background-size:contain;background-repeat:no-repeat;
+  animation:skullIn .7s cubic-bezier(.2,1.4,.3,1) both}
+@keyframes skullIn{from{opacity:0;transform:scale(1.8) rotate(-12deg)}to{opacity:1;transform:none}}
 
 /* ---------------------------------------------------------------- screens */
 #screens{position:absolute;inset:0;pointer-events:none}
@@ -664,6 +732,17 @@ body.sleeping #crosshair,body.sleeping #hint,body.sleeping #hud{opacity:0;transi
   font:clamp(24px,5vw,40px) var(--pixel);letter-spacing:.06em;color:#e9c93d;
   text-shadow:3px 0 0 #6b4d05,-3px 0 0 #6b4d05,0 3px 0 #6b4d05,0 -3px 0 #6b4d05,0 7px 0 rgba(0,0,0,.5);
 }
+/* spinning voxel cube while the world generates */
+.loadcube{
+  position:relative;width:46px;height:46px;margin:0 auto;
+  transform-style:preserve-3d;
+  animation:cubeSpin 2.6s linear infinite;
+}
+.loadcube i{position:absolute;inset:0;border:3px solid #5c8f3a;background:rgba(92,143,58,.10)}
+.loadcube i:nth-child(1){transform:rotateY(0deg) translateZ(23px)}
+.loadcube i:nth-child(2){transform:rotateY(90deg) translateZ(23px)}
+.loadcube i:nth-child(3){transform:rotateX(90deg) translateZ(23px)}
+@keyframes cubeSpin{0%{transform:rotateX(-18deg) rotateY(0)}100%{transform:rotateX(-18deg) rotateY(360deg)}}
 /* chunky segmented progress bar */
 .loadbar{width:min(420px,84vw);height:22px;background:#101420;
   box-shadow:0 0 0 4px #1b1e26, inset 2px 2px 0 rgba(0,0,0,.6);overflow:hidden}

@@ -69,6 +69,8 @@ shaped('basics', 'ladder', 3, ['S S', 'SSS', 'S S'], { S: 'stick' }, true);
 for (const plank of TAGS['#planks']) {
   const wood = plank.replace('plank_', '');
   shaped('basics', `door_${wood}`, 3, ['PP', 'PP', 'PP'], { P: plank }, true);
+  // and a matching fence: two posts and a cross-rail, three lengths at a time
+  shaped('basics', `fence_${wood}`, 3, ['PSP', 'PSP'], { P: plank, S: 'stick' }, true);
 }
 shaped('basics', 'bed', 1, ['WWW', 'PPP'], { W: '#wool', P: '#planks' }, true);
 shaped('basics', 'shears', 1, [' I', 'I '], { I: 'iron_ingot' }, true);

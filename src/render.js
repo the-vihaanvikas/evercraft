@@ -1,7 +1,7 @@
 // EVERCRAFT - materials, sky, particles, item drops, damage overlay.
 
 import * as THREE from '../vendor/three.module.js';
-import { TILE, buildTileLayers } from './textures.js';
+import { TILE, buildTileLayers, iconCanvas } from './textures.js';
 import { B, BLOCKS, block } from './blocks.js';
 
 // ---------------------------------------------------------------- shaders
@@ -544,12 +544,45 @@ export class ItemDrops {
     if (this._geoCache.has(key)) return { geo: this._geoCache.get(key), mat: this._matCache.get(key) };
     const def = (window.__EVERCRAFT_ITEM || {})[itemId];
     let geo, mat;
-    if (def && def.block) {
-      geo = new THREE.BoxGeometry(0.32, 0.32, 0.32);
-      mat = new THREE.MeshLambertMaterial({ color: blockColor(def.block) });
+    // `def.block` covers blocks; `def.place` covers items that place a block
+    // (the torch item) — both should drop as a textured little cube.
+    const blockId = (def && def.block) ? def.block : (def && def.place);
+    if (blockId) {
+      const bl = BLOCKS[blockId];
+      const topName = bl && typeof bl.tex === 'string' ? bl.tex
+        : (bl && bl.tex ? (bl.tex.top || bl.tex.side) : null);
+      const sideName = bl && typeof bl.tex === 'string' ? bl.tex
+        : (bl && bl.tex ? (bl.tex.side || bl.tex.top || bl.tex.front) : null);
+      const tTop = topName ? iconCanvas(topName, 4) : null;
+      const tSide = sideName ? iconCanvas(sideName, 4) : null;
+      if (tTop && tSide) {
+        const mk = (c) => {
+          const t = new THREE.CanvasTexture(c);
+          t.magFilter = THREE.NearestFilter; t.minFilter = THREE.NearestFilter;
+          t.generateMipmaps = false; t.colorSpace = THREE.SRGBColorSpace;
+          // transparent so cutout tiles (torch, plants) keep their holes
+          return new THREE.MeshLambertMaterial({ map: t, transparent: true });
+        };
+        geo = new THREE.BoxGeometry(0.32, 0.32, 0.32);
+        const top = mk(tTop), side = mk(tSide);
+        mat = [side, side, top, side, side, side];
+      } else {
+        geo = new THREE.BoxGeometry(0.32, 0.32, 0.32);
+        mat = new THREE.MeshLambertMaterial({ color: blockColor(blockId) });
+      }
     } else {
-      geo = new THREE.BoxGeometry(0.28, 0.28, 0.06);
-      mat = new THREE.MeshLambertMaterial({ color: itemTint(itemId) });
+      // non-block items: a slab wearing their 16x16 pixel icon when it exists
+      const icon = def && def.icon ? iconCanvas(def.icon, 4) : null;
+      if (icon) {
+        const t = new THREE.CanvasTexture(icon);
+        t.magFilter = THREE.NearestFilter; t.minFilter = THREE.NearestFilter;
+        t.generateMipmaps = false; t.colorSpace = THREE.SRGBColorSpace;
+        geo = new THREE.BoxGeometry(0.26, 0.26, 0.10);
+        mat = new THREE.MeshLambertMaterial({ map: t, transparent: true });
+      } else {
+        geo = new THREE.BoxGeometry(0.28, 0.28, 0.06);
+        mat = new THREE.MeshLambertMaterial({ color: itemTint(itemId) });
+      }
     }
     this._geoCache.set(key, geo);
     this._matCache.set(key, mat);
@@ -665,11 +698,76 @@ function itemTint(id) {
 }
 
 // ------------------------------------------------------- block break overlay
+/**
+ * Procedural crack texture: dark jagged lines on transparent, four stages of
+ * damage. Drawn once, shared by every block being broken.
+ */
+function makeCrackStages() {
+  const stages = [];
+  const S = 64;
+  for (let s = 0; s < 4; s++) {
+    const c = document.createElement('canvas');
+    c.width = S; c.height = S;
+    const ctx = c.getContext('2d');
+    ctx.clearRect(0, 0, S, S);
+    const rnd = mulberry(s * 7919 + 13);
+    const r = () => rnd();
+    // a few branching cracks seeded from random edges
+    for (let k = 0; k < 2 + s; k++) {
+      let x, y;
+      const edge = (r() * 4) | 0;
+      if (edge === 0) { x = r() * S; y = 0; }
+      else if (edge === 1) { x = S; y = r() * S; }
+      else if (edge === 2) { x = r() * S; y = S; }
+      else { x = 0; y = r() * S; }
+      ctx.strokeStyle = `rgba(8,8,10,${0.5 + s * 0.12})`;
+      ctx.lineWidth = 1.4 + r() * 1.2;
+      ctx.beginPath();
+      ctx.moveTo(x, y);
+      let px = x, py = y;
+      const segs = 4 + s * 2;
+      for (let i = 0; i < segs; i++) {
+        const ang = Math.atan2(S / 2 - py, S / 2 - px) + (r() - 0.5) * 1.9;
+        const len = S * (0.10 + r() * 0.16);
+        px += Math.cos(ang) * len;
+        py += Math.sin(ang) * len;
+        ctx.lineTo(px, py);
+        if (r() < 0.3 && s > 1) {
+          // a branch off the main crack
+          ctx.moveTo(px, py);
+          ctx.lineTo(px + Math.cos(ang + 0.9) * len * 0.6, py + Math.sin(ang + 0.9) * len * 0.6);
+          ctx.moveTo(px, py);
+        }
+      }
+      ctx.stroke();
+    }
+    stages.push(c);
+  }
+  return stages;
+}
+function mulberry(seed) {
+  let a = seed >>> 0;
+  return () => {
+    a |= 0; a = (a + 0x6D2B79F5) | 0;
+    let t = Math.imul(a ^ (a >>> 15), 1 | a);
+    t = (t + Math.imul(t ^ (t >>> 7), 61 | t)) ^ t;
+    return ((t ^ (t >>> 14)) >>> 0) / 4294967296;
+  };
+}
+
 export class BreakOverlay {
   constructor(scene) {
+    this.stages = makeCrackStages();
+    this.texs = this.stages.map(c => {
+      const t = new THREE.CanvasTexture(c);
+      t.magFilter = THREE.NearestFilter;
+      t.minFilter = THREE.NearestFilter;
+      t.generateMipmaps = false;
+      return t;
+    });
     const geo = new THREE.BoxGeometry(1.004, 1.004, 1.004);
     const mat = new THREE.MeshBasicMaterial({
-      color: 0x000000, transparent: true, opacity: 0.0, depthWrite: false,
+      map: this.texs[0], transparent: true, opacity: 0.0, depthWrite: false,
     });
     this.mesh = new THREE.Mesh(geo, mat);
     this.mesh.visible = false;
@@ -687,7 +785,10 @@ export class BreakOverlay {
   show(x, y, z, progress) {
     this.mesh.visible = progress > 0.02;
     this.mesh.position.set(x + 0.5, y + 0.5, z + 0.5);
-    this.mesh.material.opacity = Math.min(0.72, progress * 0.75);
+    const stage = Math.min(this.texs.length - 1, Math.floor(progress * this.texs.length));
+    this.mesh.material.map = this.texs[stage];
+    this.mesh.material.opacity = Math.min(1, 0.35 + progress * 0.65);
+    this.mesh.material.needsUpdate = true;
     this.sel.visible = true;
     this.sel.position.set(x + 0.5, y + 0.5, z + 0.5);
   }

@@ -18,6 +18,7 @@ import { Audio } from './audio.js';
 import { UI, addToContainer, smeltTime } from './ui.js';
 import { RECIPES, SMELT, FUEL, TAGS, isTag } from './recipes.js';
 import { hashString } from './noise.js';
+import { iconCanvas } from './textures.js';
 
 const SAVE_PREFIX = 'evercraft.save.';
 const SETTINGS_KEY = 'evercraft.settings';
@@ -68,6 +69,7 @@ export class Game {
     this.spawnTimer = 0;
     this.hurtTint = 0;
     this.sleep = null;        // active sleep cinematic state, if any
+    this.death = null;        // active death cinematic state, if any
     this._initGraphics();
     this.audio = new Audio();
     this.ui = new UI(this);
@@ -272,6 +274,13 @@ export class Game {
     if (!p) return;
     const ui = this.ui;
 
+    // The death cinematic owns the screen: Escape/space skip the fall. It is
+    // checked first so dying during the sleep cinematic hands control over.
+    if (this.death) {
+      e.preventDefault();
+      if (k === 'Escape' || k === 'Space' || k === 'Enter') this._skipDeath();
+      return;
+    }
     // The sleep cinematic owns the screen: Escape (or Space) skips to the end,
     // every other key is swallowed so nothing can be mined, placed or opened.
     if (this.sleep) {
@@ -472,6 +481,7 @@ export class Game {
       // item on demand without cluttering or pre-filling the player's hotbar.
     }
     this.slot = opts.slot ?? 1;
+    this._lastLevel = this.player.level;
 
     this.running = true;
     this.updateFog();
@@ -502,13 +512,15 @@ export class Game {
     if (this.fpsAcc > 0.5) { this.fps = this.fpsCount / this.fpsAcc; this.fpsAcc = 0; this.fpsCount = 0; }
 
     const sleeping = !!this.sleep;
+    const dying = !!this.death;
     const active = (!this.ui.isOpen() || this.ui.screen === 'inventory' || this.ui.screen === 'craft'
-      || this.ui.screen === 'crate' || this.ui.screen === 'smelter') && !sleeping;
+      || this.ui.screen === 'crate' || this.ui.screen === 'smelter') && !sleeping && !dying;
 
     // While the sleep cinematic runs, time is driven by the cinematic itself.
     if (active) this.worldTime += dt;
     this._pollInput();
     if (sleeping) this._updateSleep(dt);
+    if (dying) this._updateDeath(dt);
 
     if (!this.player.dead) {
       this.player.update(active ? dt : 0, this.input);
@@ -516,11 +528,12 @@ export class Game {
 
     this.world.update(this.player.pos.x, this.player.pos.z);
 
-    if (sleeping) {
-      // the world keeps breathing around the sleeper, but nothing the player
-      // does can touch it
-      this._updateEntities(dt);
-      this.particles.update(dt, this.world);
+    if (sleeping || dying) {
+      // the world keeps breathing around the player, but nothing they do can
+      // touch it; death drifts in slow motion for a beat
+      const sdt = dying ? dt * 0.45 : dt;
+      this._updateEntities(sdt);
+      this.particles.update(sdt, this.world);
     }
 
     if (active) {
@@ -544,10 +557,16 @@ export class Game {
     this._updateHand(dt);
     this._checkNearBench();
 
-    if (this.player.dead && !this._deathShown) {
-      this._deathShown = true;
-      document.exitPointerLock();
-      this.ui.showDeath(this._deathCause || 'The world claimed you.');
+    // Death is a cinematic, not a cut: the camera falls, the world fades to
+    // red, and only then does the death screen appear.
+    if (this.player.dead && !this.death && !this._deathShown) {
+      this._beginDeath(this.player.deathCause || 'The world claimed you.');
+    }
+    // level-up flourish
+    if (p.level > this._lastLevel) {
+      this._lastLevel = p.level;
+      this.particles.burst(p.pos.x, p.pos.y + 1.2, p.pos.z, 0xffd76a, 24, 2.8, 0.07, 1.1);
+      this.particles.burst(p.pos.x, p.pos.y + 1.7, p.pos.z, 0x8ff08a, 12, 1.5, 0.05, 0.8);
     }
 
     this.materials.shared.uTime.value = this.time;
@@ -621,6 +640,7 @@ export class Game {
       top: new THREE.Color(), hor: new THREE.Color(), bottom: new THREE.Color(),
       fog: new THREE.Color(), underground: new THREE.Color(0x0a0c12),
       water: new THREE.Color(0x1b5478), lava: new THREE.Color(0xd6400e),
+      death: new THREE.Color(0x4a0c06),
     });
 
     // sun colour shifts at dawn/dusk
@@ -648,6 +668,8 @@ export class Game {
 
     // fog matches horizon
     const fog = C.fog.copy(hor).multiplyScalar(0.92);
+    // the death veil bleeds into the whole scene, not just the overlay
+    if (this.death) fog.lerp(C.death, 0.55);
     const py = this.player.pos.y;
     // heightAt() walks a column; once a frame is fine but cache it for the
     // other systems that ask for the same value.
@@ -712,8 +734,12 @@ export class Game {
 
     const torso = mk(8 * px, TORSO, 4 * px, tunic, 0, hipY + TORSO / 2, 0);
     const belt = mk(8.4 * px, 1.6 * px, 4.4 * px, 0x2c2f36, 0, hipY + 1 * px, 0);
+    const buckle = mk(1.4 * px, 1.4 * px, 0.6 * px, 0xd8b070, 0, hipY + 1 * px, -2.3 * px);
     const head = mk(HEAD, HEAD, HEAD, skin, 0, shoulderY + HEAD / 2, 0);
-    const hair = mk(8.4 * px, 2.4 * px, 8.4 * px, 0x4a3524, 0, shoulderY + HEAD - 0.4 * px, 0);
+    // hair: a cap with a parted fringe in front
+    const hair = mk(8.4 * px, 2.6 * px, 8.4 * px, 0x4a3524, 0, shoulderY + HEAD - 0.5 * px, 0);
+    const fringeL = mk(1.6 * px, 1.4 * px, 0.7 * px, 0x4a3524, -2.2 * px, shoulderY + HEAD - 1.1 * px, -4.1 * px);
+    const fringeR = mk(1.6 * px, 1.4 * px, 0.7 * px, 0x3a2a1c, 2.2 * px, shoulderY + HEAD - 1.1 * px, -4.1 * px);
     const armL = limbPivot(4 * px, TORSO, 4 * px, tunic, -6 * px, shoulderY, 0);
     const armR = limbPivot(4 * px, TORSO, 4 * px, tunic, 6 * px, shoulderY, 0);
     const handL = mk(4.1 * px, 3 * px, 4.1 * px, skin, -6 * px, shoulderY - TORSO + 1.5 * px, 0);
@@ -722,13 +748,29 @@ export class Game {
     const legR = limbPivot(4 * px, LEG, 4 * px, trouser, 2 * px, hipY, 0);
     const bootL = mk(4.2 * px, 2 * px, 4.6 * px, boot, -2 * px, 1 * px, -0.2 * px);
     const bootR = mk(4.2 * px, 2 * px, 4.6 * px, boot, 2 * px, 1 * px, -0.2 * px);
-    const eyeL = mk(1.4 * px, 1.4 * px, px, 0x1d2430, -1.8 * px, shoulderY + 4.6 * px, -4.1 * px);
-    const eyeR = mk(1.4 * px, 1.4 * px, px, 0x1d2430, 1.8 * px, shoulderY + 4.6 * px, -4.1 * px);
+    const soleL = mk(4.2 * px, 0.5 * px, 4.6 * px, 0x1c1e24, -2 * px, 0.2 * px, -0.2 * px);
+    const soleR = mk(4.2 * px, 0.5 * px, 4.6 * px, 0x1c1e24, 2 * px, 0.2 * px, -0.2 * px);
+    // face: pupils, brows and a mouth so the avatar reads at distance. These
+    // ride INSIDE the head (and fringe inside the hair) so they rotate along.
+    const eyeL = mk(1.6 * px, 1.6 * px, px, 0xf0f2f6, -1.8 * px, shoulderY + 4.6 * px, -4.1 * px);
+    const eyeR = mk(1.6 * px, 1.6 * px, px, 0xf0f2f6, 1.8 * px, shoulderY + 4.6 * px, -4.1 * px);
+    const pupilL = mk(0.8 * px, 1.0 * px, 0.7 * px, 0x2c3548, -1.8 * px, shoulderY + 4.55 * px, -4.4 * px);
+    const pupilR = mk(0.8 * px, 1.0 * px, 0.7 * px, 0x2c3548, 1.8 * px, shoulderY + 4.55 * px, -4.4 * px);
+    const browL = mk(1.8 * px, 0.6 * px, 0.6 * px, 0x3a2a1c, -1.8 * px, shoulderY + 5.6 * px, -4.3 * px);
+    const browR = mk(1.8 * px, 0.6 * px, 0.6 * px, 0x3a2a1c, 1.8 * px, shoulderY + 5.6 * px, -4.3 * px);
+    const mouth = mk(2.2 * px, 0.7 * px, 0.6 * px, 0x9c6a52, 0, shoulderY + 2.6 * px, -4.2 * px);
+    head.add(eyeL, eyeR, pupilL, pupilR, browL, browR, mouth);
+    hair.add(fringeL, fringeR);
+    // the avatar holds whatever the main hand holds (a little cube in the
+    // right fist; tools would need a full rig, this reads well at distance)
+    const heldItem = mk(3 * px, 3 * px, 3 * px, 0x8a6a45, 0, 0, -1.6 * px);
+    heldItem.visible = false;
+    handR.add(heldItem);
 
-    g.add(torso, belt, head, hair, armL, armR, handL, handR,
-      legL, legR, bootL, bootR, eyeL, eyeR);
+    g.add(torso, belt, buckle, head, hair, armL, armR, handL, handR,
+      legL, legR, bootL, bootR, soleL, soleR);
     g.userData = { arms: [armL, armR], legs: [legL, legR], hands: [handL, handR],
-      head, hair, eyes: [eyeL, eyeR], shoulderY, TORSO, hipY };
+      head, hair, eyes: [eyeL, eyeR], heldItem, shoulderY, TORSO, hipY };
     // YXZ: yaw first, then pitch about the avatar's OWN right axis. With the
     // default XYZ order the swim pitch was applied about the world X axis, so
     // facing east or west made the avatar roll onto its side instead of lying
@@ -822,6 +864,16 @@ export class Game {
       h.position.z = -Math.sin(rx) * (ud.TORSO - 1.5 / 16);
       h.rotation.x = rx;
     });
+    // the right fist holds whatever the main hand holds
+    if (ud.heldItem) {
+      const held = p.held;
+      const d = held ? itemDef(held.id) : null;
+      ud.heldItem.visible = !!held;
+      if (held) {
+        const c = d && d.block ? blockColor(d.block) : avatarItemTint(held.id);
+        ud.heldItem.material.color.setHex(c);
+      }
+    }
     // sneak crouch (blended swim height was applied above)
     a.position.y = p.pos.y + this._avSwim * 0.70 - (p.sneaking ? 0.14 : 0);
   }
@@ -856,6 +908,21 @@ export class Game {
 
   _updateCamera(dt) {
     const p = this.player;
+    // The death cinematic drives the camera directly: the view sags and rolls
+    // while the red veil closes in.
+    if (this.death && this._deathCam) {
+      const c = this._deathCam;
+      this.camera.position.copy(c.pos);
+      this.camera.rotation.set(0, 0, 0, 'YXZ');
+      this.camera.rotation.y = c.yaw;
+      this.camera.rotation.x = c.pitch;
+      this.camera.rotation.z = Math.sin(this.time * 0.8) * 0.05;
+      this.camera.fov += (this.fov * 1.06 - this.camera.fov) * Math.min(1, dt * 4);
+      this.camera.updateProjectionMatrix();
+      this.handGroup.visible = false;
+      if (this.offhandGroup) this.offhandGroup.visible = false;
+      return;
+    }
     // The sleep cinematic drives the camera directly.
     if (this.sleep && this._sleepCam) {
       const c = this._sleepCam;
@@ -870,6 +937,12 @@ export class Game {
       return;
     }
     const eye = p.eyePos();
+    // Impact shake: a short-lived jolt whenever damage lands, decaying back to
+    // stillness so it never lingers or rattles at a fixed amplitude.
+    const justHurt = p.hurtCd > 0 && performance.now() - p.lastDamage < 320;
+    const wantShake = justHurt ? 0.30 : 0;
+    this._shake = Math.max((this._shake || 0) * Math.exp(-6.5 * dt), wantShake);
+    const shk = this._shake;
     // Smooth view bob. The old abs(sin) waveform had a mathematical cusp at
     // every footfall and snapped instantly between walking/sprinting amplitudes.
     // Continuous sine targets plus exponential damping feel weighty at any FPS.
@@ -897,14 +970,18 @@ export class Game {
     //   0 = first person
     //   1 = third person, camera BEHIND the player looking the way they face
     //   2 = third person, camera IN FRONT looking back at the player
+    // deterministic shake offsets (sines, not per-frame random jitter)
+    const shkX = shk > 0.01 ? Math.sin(this.time * 57) * shk * 0.05 : 0;
+    const shkY = shk > 0.01 ? Math.cos(this.time * 49) * shk * 0.04 : 0;
+    const shkR = shk > 0.01 ? Math.sin(this.time * 43) * shk * 0.02 : 0;
     if (this.cameraMode === 0) {
-      this.camera.position.set(eye.x + bobX * 0.3, eye.y + bobY, eye.z);
+      this.camera.position.set(eye.x + bobX * 0.3 + shkX, eye.y + bobY + shkY, eye.z);
       // first person drives rotation directly from yaw/pitch (no lookAt), so
       // the view can never roll or drift away from the crosshair
       this.camera.rotation.set(0, 0, 0, 'YXZ');
       this.camera.rotation.y = p.yaw;
       this.camera.rotation.x = p.pitch;
-      this.camera.rotation.z = roll;
+      this.camera.rotation.z = roll + shkR;
     } else {
       const dist = 4.2;
       // mode 1 sits behind (opposite the look direction), mode 2 sits ahead
@@ -922,7 +999,7 @@ export class Game {
           cx = eye.x + off.x * f; cy = eye.y + off.y * f; cz = eye.z + off.z * f;
         }
       }
-      this.camera.position.set(cx, cy, cz);
+      this.camera.position.set(cx + shkX, cy + shkY, cz);
       // both third-person modes look at the player, so mode 2 faces them
       this.camera.rotation.set(0, 0, 0, 'YXZ');
       this.camera.lookAt(eye.x, eye.y, eye.z);
@@ -958,6 +1035,25 @@ export class Game {
     const swimming = p.swimPose;
     this.offhandGroup.visible = this.cameraMode === 0 && !this.sleep &&
       (!!offId || swimming);
+
+    // a torch or lantern in either hand casts a warm glint on nearby mobs
+    const lit = (i) => i === 'torch' || i === 'torch_item' || i === 'lantern';
+    if (lit(id) && !this._handLight) {
+      this._handLight = new THREE.PointLight(0xffb648, 0.5, 7, 1.6);
+      this._handLight.position.set(0, -0.05, -0.25);
+      this.handGroup.add(this._handLight);
+    } else if (!lit(id) && this._handLight) {
+      this.handGroup.remove(this._handLight);
+      this._handLight = null;
+    }
+    if (lit(offId) && !this._offhandLight) {
+      this._offhandLight = new THREE.PointLight(0xffb648, 0.5, 7, 1.6);
+      this._offhandLight.position.set(0, -0.05, -0.25);
+      this.offhandGroup.add(this._offhandLight);
+    } else if (!lit(offId) && this._offhandLight) {
+      this.offhandGroup.remove(this._offhandLight);
+      this._offhandLight = null;
+    }
 
     if (!this._handMesh) return;
     const sw = Math.max(0, p.swingT);
@@ -1036,6 +1132,31 @@ export class Game {
     return g;
   }
 
+  /** Shared texture cache for held blocks (per tile name). */
+  _blockTex(name) {
+    if (this._heldTexCache && this._heldTexCache.has(name)) return this._heldTexCache.get(name);
+    if (!this._heldTexCache) this._heldTexCache = new Map();
+    const c = iconCanvas(name, 4);
+    if (!c) return null;
+    const t = new THREE.CanvasTexture(c);
+    t.magFilter = THREE.NearestFilter;
+    t.minFilter = THREE.NearestFilter;
+    t.generateMipmaps = false;
+    t.colorSpace = THREE.SRGBColorSpace;
+    this._heldTexCache.set(name, t);
+    return t;
+  }
+
+  /** Shared Lambert material for held blocks with a given map. */
+  _blockMat(map) {
+    let m = this._heldMatCache && this._heldMatCache.get(map);
+    if (m) return m;
+    if (!this._heldMatCache) this._heldMatCache = new Map();
+    m = new THREE.MeshLambertMaterial({ map, transparent: true });
+    this._heldMatCache.set(map, m);
+    return m;
+  }
+
   _makeHandMesh(id, mirrored = false) {
     const def = id ? itemDef(id) : null;
     if (!id) {
@@ -1043,23 +1164,61 @@ export class Game {
       if (mirrored) arm.children.forEach(c => { c.position.x = -c.position.x; });
       return arm;
     }
+    const grp = new THREE.Group();
+    if (id === 'torch' || id === 'torch_item') {
+      // torch: stick with a lit ember head (before the block branch, which
+      // would wrap the transparent tile on a cube)
+      const arm = this._makeArm();
+      arm.position.set(-0.01, -0.075, 0.16);
+      arm.scale.setScalar(0.92);
+      grp.add(arm);
+      const stick = new THREE.Mesh(new THREE.BoxGeometry(0.028, 0.028, 0.16), new THREE.MeshLambertMaterial({ color: 0x7a5a38 }));
+      stick.position.set(0, 0, -0.02);
+      grp.add(stick);
+      const flame = new THREE.Mesh(new THREE.BoxGeometry(0.05, 0.07, 0.05),
+        new THREE.MeshBasicMaterial({ color: 0xffb648 }));
+      flame.position.set(0, 0.02, -0.105);
+      grp.add(flame);
+      return grp;
+    }
+    if (id === 'lantern') {
+      // a tiny hanging lantern, matching the world block entity
+      const arm = this._makeArm();
+      arm.position.set(-0.01, -0.075, 0.16);
+      arm.scale.setScalar(0.92);
+      grp.add(arm);
+      const iron = new THREE.MeshLambertMaterial({ color: 0x343944 });
+      const chain = new THREE.Mesh(new THREE.BoxGeometry(0.03, 0.10, 0.03), iron);
+      chain.position.set(0, 0.05, -0.14);
+      const body = new THREE.Mesh(new THREE.BoxGeometry(0.10, 0.12, 0.10),
+        new THREE.MeshBasicMaterial({ color: 0xffbd45 }));
+      body.position.set(0, -0.04, -0.14);
+      const cap = new THREE.Mesh(new THREE.BoxGeometry(0.12, 0.03, 0.12), iron);
+      cap.position.set(0, 0.01, -0.14);
+      grp.add(chain, body, cap);
+      return grp;
+    }
     if (def && def.block) {
-      // held block, with the arm visible behind it
-      const grp = new THREE.Group();
-      const g = new THREE.BoxGeometry(0.17, 0.17, 0.17);
-      const m = new THREE.Mesh(g, new THREE.MeshLambertMaterial({ color: blockColor(def.block) }));
-      grp.add(m);
+      // held block with its REAL tile art on every face, arm behind it
+      const bl = BLOCKS[def.block];
+      const topName = typeof bl.tex === 'string' ? bl.tex : (bl.tex.top || bl.tex.side);
+      const sideName = typeof bl.tex === 'string' ? bl.tex : (bl.tex.side || bl.tex.top || bl.tex.front);
+      const tTop = this._blockTex(topName), tSide = this._blockTex(sideName);
+      if (tTop && tSide) {
+        const geo = new THREE.BoxGeometry(0.17, 0.17, 0.17);
+        const sTop = this._blockMat(tTop), sSide = this._blockMat(tSide);
+        const mats = [sSide, sSide, sTop, sSide, sSide, sSide];
+        grp.add(new THREE.Mesh(geo, mats));
+      } else {
+        grp.add(new THREE.Mesh(new THREE.BoxGeometry(0.17, 0.17, 0.17),
+          new THREE.MeshLambertMaterial({ color: blockColor(def.block) })));
+      }
       const arm = this._makeArm();
       arm.position.set(-0.02, -0.10, 0.20);
       arm.scale.setScalar(0.9);
       grp.add(arm);
       return grp;
     }
-    // tool: simple stick + head, gripped by the visible arm
-    const grp = new THREE.Group();
-    const handle = new THREE.Mesh(new THREE.BoxGeometry(0.034, 0.034, 0.30),
-      new THREE.MeshLambertMaterial({ color: 0x8a6a45 }));
-    grp.add(handle);
     const arm = this._makeArm();
     arm.position.set(-0.01, -0.075, 0.16);
     arm.scale.setScalar(0.92);
@@ -1069,16 +1228,60 @@ export class Game {
       hide: 0x9c6b3f,
     };
     const mkey = Object.keys(matColor).find(k => id.includes(k));
-    if (mkey) {
-      const head = new THREE.Mesh(new THREE.BoxGeometry(0.125, 0.038, 0.062),
-        new THREE.MeshLambertMaterial({ color: matColor[mkey] }));
-      head.position.z = -0.125;
-      if (id.startsWith('blade')) { head.geometry = new THREE.BoxGeometry(0.032, 0.10, 0.23); head.position.z = -0.18; }
+    const mat = mkey ? matColor[mkey] : 0xcfc0a1;
+    const tool = def && def.tool;
+    const handle = new THREE.Mesh(new THREE.BoxGeometry(0.034, 0.034, 0.26),
+      new THREE.MeshLambertMaterial({ color: 0x8a6a45 }));
+    grp.add(handle);
+    if (tool === 'pick') {
+      // pick: a cross-bar with two prongs curving down at each end
+      const bar = new THREE.Mesh(new THREE.BoxGeometry(0.16, 0.038, 0.05), new THREE.MeshLambertMaterial({ color: mat }));
+      bar.position.set(0, 0.01, -0.13);
+      grp.add(bar);
+      for (const s of [-1, 1]) {
+        const prong = new THREE.Mesh(new THREE.BoxGeometry(0.05, 0.11, 0.035), new THREE.MeshLambertMaterial({ color: mat }));
+        prong.position.set(s * 0.075, -0.045, -0.125);
+        prong.rotation.x = s * 0.55;
+        grp.add(prong);
+      }
+    } else if (tool === 'axe') {
+      const head = new THREE.Mesh(new THREE.BoxGeometry(0.05, 0.13, 0.10), new THREE.MeshLambertMaterial({ color: mat }));
+      head.position.set(0, 0.02, -0.13);
+      head.rotation.x = -0.12;
       grp.add(head);
+    } else if (tool === 'shovel') {
+      const head = new THREE.Mesh(new THREE.BoxGeometry(0.095, 0.10, 0.045), new THREE.MeshLambertMaterial({ color: mat }));
+      head.position.set(0, -0.015, -0.125);
+      head.rotation.x = 0.3;
+      grp.add(head);
+    } else if (tool === 'blade') {
+      // sword: long blade, crossguard and pommel
+      const blade = new THREE.Mesh(new THREE.BoxGeometry(0.045, 0.045, 0.26), new THREE.MeshLambertMaterial({ color: mat }));
+      blade.position.set(0, 0.01, -0.20);
+      grp.add(blade);
+      const guard = new THREE.Mesh(new THREE.BoxGeometry(0.10, 0.02, 0.025), new THREE.MeshLambertMaterial({ color: 0x6b5638 }));
+      guard.position.set(0, 0.01, -0.075);
+      grp.add(guard);
+    } else if (def && def.food) {
+      const foodCol = {
+        sunberry: 0xe8563f, raw_meat: 0xd0685f, cooked_meat: 0x9c5a30,
+        raw_fowl: 0xe0a898, cooked_fowl: 0xc98a44, berry_pie: 0xd6a860,
+        mush_stew: 0x8a5a34,
+      }[id] || 0xc08a50;
+      const f = new THREE.Mesh(new THREE.BoxGeometry(0.09, 0.09, 0.09),
+        new THREE.MeshLambertMaterial({ color: foodCol }));
+      f.position.set(0, 0, -0.10);
+      grp.add(f);
+    } else if (tool === 'shears') {
+      const s1 = new THREE.Mesh(new THREE.BoxGeometry(0.05, 0.012, 0.13), new THREE.MeshLambertMaterial({ color: 0xd6cdc0 }));
+      s1.position.set(-0.02, 0, -0.08); s1.rotation.z = 0.15;
+      const s2 = s1.clone(); s2.position.x = 0.02; s2.rotation.z = -0.15;
+      grp.add(s1, s2);
     } else {
-      const head = new THREE.Mesh(new THREE.BoxGeometry(0.10, 0.10, 0.062),
-        new THREE.MeshLambertMaterial({ color: 0xcfc0a1 }));
-      head.position.z = -0.115;
+      // generic material item: a small lump in the item's colour
+      const head = new THREE.Mesh(new THREE.BoxGeometry(0.075, 0.065, 0.11),
+        new THREE.MeshLambertMaterial({ color: avatarItemTint(id) }));
+      head.position.z = -0.11;
       grp.add(head);
     }
     return grp;
@@ -1126,15 +1329,23 @@ export class Game {
     const { hit } = this._target();
 
     // hover hint for interactables
+    let interact = false;
     if (hit) {
       const bl = BLOCKS[hit.id];
       if (bl && bl.use) {
+        interact = true;
         const label = bl.use === 'bench' ? 'Craft' : bl.use === 'smelter' ? 'Open Smelter'
           : bl.use === 'crate' ? 'Open Chest' : bl.use === 'bed' ? 'Sleep / Set Spawn'
             : bl.use === 'door' ? (bl.open ? 'Close Door' : 'Open Door') : 'Open';
         this.ui.hint(`<kbd>RMB</kbd> ${label}`);
       } else this.ui.hint('');
     } else this.ui.hint('');
+    // the crosshair warms up when something can be used
+    if (interact !== this._interact) {
+      this._interact = interact;
+      const xh = document.getElementById('crosshair');
+      if (xh) xh.classList.toggle('interact', interact);
+    }
 
     if (!this.mouse.left) {
       this.breakOverlay.hide();
@@ -1414,9 +1625,9 @@ export class Game {
       }
     }
 
-    // support checks for plants / torches
+    // support checks for plants / torches / lanterns
     const below = this.world.getBlock(bx, by - 1, bz);
-    if ((placeBl.render === 2 || placeId === B.CACTUS || placeId === B.TORCH) &&
+    if ((placeBl.render === 2 || placeId === B.CACTUS || placeId === B.TORCH || placeId === B.LANTERN) &&
       placeBl.wallDir === undefined &&
       (below === 0 || below === B.WATER || (BLOCKS[below] && BLOCKS[below].noCollide))) {
       this.audio.error();
@@ -1589,7 +1800,7 @@ export class Game {
     if (this.ui.isOpen()) this.ui.close();
     document.exitPointerLock();
     this.ui.beginSleep();
-    this.audio.sleep ? this.audio.sleep() : this.audio.click();
+    this.audio.sleep();
   }
 
   /** Duration of each cinematic stage, in seconds. */
@@ -1709,6 +1920,95 @@ export class Game {
     this.requestPointerLock();
   }
 
+  // ------------------------------------------------------------------ death
+  /**
+   * Staged death cinematic, in the same spirit as the sleep cinematic: the
+   * camera sags and rolls, the world slows, a red veil closes in, and the
+   * death screen appears only after the fall. Every input is swallowed while
+   * it runs (Escape skips straight to the screen).
+   */
+  _beginDeath(cause) {
+    if (this.death) return;
+    const p = this.player;
+    // dying in your sleep (a hostile wandered in) ends the sleep cinematic
+    if (this.sleep) { this.sleep = null; this.ui.endSleep(); }
+    document.exitPointerLock();
+    this.ui.close();
+    this._cancelMining();
+    this.ui.hint('');
+    document.body.classList.add('dying');
+    const eye = p.eyePos();
+    this.death = {
+      stage: 0, t: 0, cause,
+      camFrom: eye.clone(),
+      camTo: new THREE.Vector3(eye.x + 0.14, Math.max(eye.y - 1.5, 0.4), eye.z + 0.1),
+      yawFrom: p.yaw, pitchFrom: p.pitch,
+      yawTo: p.yaw + Math.PI * 0.42, pitchTo: 1.30,
+      done: false,
+    };
+    this.audio.death();
+    this.ui.updateDeathCap('The light fades\u2026');
+  }
+
+  /** Duration of each death stage, in seconds. */
+  static get DEATH_STAGES() {
+    return [
+      { key: 'fall', dur: 1.7, cap: 'The light fades\u2026' },
+      { key: 'darken', dur: 1.6, cap: 'The world slips away\u2026' },
+      { key: 'end', dur: 0.9, cap: '' },
+    ];
+  }
+
+  _updateDeath(dt) {
+    const d = this.death;
+    if (!d) return;
+    const stages = Game.DEATH_STAGES;
+    d.t += dt;
+    let st = stages[d.stage];
+    while (d.t >= st.dur) {
+      d.t -= st.dur;
+      d.stage++;
+      if (d.stage >= stages.length) { this._finishDeath(); return; }
+      st = stages[d.stage];
+    }
+    const f = Math.min(1, d.t / st.dur);
+    const ease = f * f * (3 - 2 * f);
+    const cam = this._deathCam || (this._deathCam = {
+      pos: new THREE.Vector3(), yaw: 0, pitch: 0,
+    });
+    if (st.key === 'fall') {
+      cam.pos.copy(d.camFrom).lerp(d.camTo, ease);
+      cam.yaw = d.yawFrom + shortestAngle(d.yawFrom, d.yawTo) * ease;
+      cam.pitch = d.pitchFrom + (d.pitchTo - d.pitchFrom) * ease;
+    } else {
+      cam.pos.copy(d.camTo);
+      if (st.key !== 'end') cam.pos.y += Math.sin(this.time * 0.9) * 0.035;
+      cam.yaw = d.yawTo;
+      cam.pitch = d.pitchTo;
+    }
+    // red veil: ramps during the fall, seals during 'darken'
+    const veil = st.key === 'fall' ? ease * 0.8 : 0.8 + (st.key === 'darken' ? ease * 0.2 : 0);
+    this.ui.updateDeath(veil, st.cap);
+  }
+
+  _finishDeath() {
+    const d = this.death;
+    if (!d) return;
+    this.death = null;
+    this._deathShown = true;
+    const p = this.player;
+    this.ui.showDeath(d.cause, {
+      day: Math.floor(this.worldTime / DAY_LENGTH) + 1,
+      level: p.level, mined: p.stats.mined, placed: p.stats.placed, killed: p.stats.killed,
+    });
+  }
+
+  _skipDeath() {
+    if (!this.death) return;
+    this.death.stage = Game.DEATH_STAGES.length;
+    this.death.t = 0;
+  }
+
   _pickBlock() {
     const { hit } = this._target();
     if (!hit) return;
@@ -1731,6 +2031,7 @@ export class Game {
       slot = use.slot === null ? p.hotbarIdx : use.slot;
     }
     if (p.eat(slot)) {
+      p.swingT = 1;    // the arm raises the food to the mouth
       this.particles.burst(p.pos.x, p.pos.y + 1.4, p.pos.z, 0xd8b070, 6, 1.2, 0.05, 0.5);
     }
   }
@@ -2124,6 +2425,8 @@ export class Game {
         const e = new Entity(kind, sx + 0.5, y, sz + 0.5);
         this.entityGroup.add(e.buildMesh());
         this.entities.push(e);
+        // a little puff so creatures visibly materialise instead of popping
+        this.particles.burst(sx + 0.5, y + 0.3, sz + 0.5, 0xc8c0b0, 5, 1.1, 0.045, 0.35);
         if (this.entities.length >= cap) break;
       }
       break;
@@ -2142,6 +2445,52 @@ export class Game {
 
   _ambientParticles(dt) {
     const p = this.player;
+    const dl = this.daylight();
+    const bioHere = this.world.biomeAt(p.pos.x, p.pos.z);
+
+    // fireflies drift over the woods at night
+    const woodsy = bioHere === BIOME.FOREST || bioHere === BIOME.MEADOW ||
+      bioHere === BIOME.PLAINS || bioHere === BIOME.MARSH;
+    if (dl < 0.24 && woodsy && !p.headInWater && Math.random() < dt * 5) {
+      this.particles.spawn(
+        p.pos.x + (Math.random() - 0.5) * 16,
+        p.pos.y + 0.8 + Math.random() * 4.5,
+        p.pos.z + (Math.random() - 0.5) * 16,
+        (Math.random() - 0.5) * 0.3, 0.06 + Math.random() * 0.1, (Math.random() - 0.5) * 0.3,
+        Math.random() < 0.55 ? 0xd8ff8a : 0xffe98a, 0.032, 2.4 + Math.random() * 1.8, 0);
+    }
+    // leaves spiral down from the canopy in the woods
+    if ((bioHere === BIOME.FOREST || bioHere === BIOME.EMBERWOOD) &&
+      Math.random() < dt * 2.2) {
+      const leafCol = bioHere === BIOME.EMBERWOOD ? 0xc4533f : 0x6fbe4c;
+      this.particles.spawn(
+        p.pos.x + (Math.random() - 0.5) * 14,
+        p.pos.y + 5 + Math.random() * 6,
+        p.pos.z + (Math.random() - 0.5) * 14,
+        (Math.random() - 0.5) * 0.5, -0.5 - Math.random() * 0.7, (Math.random() - 0.5) * 0.5,
+        leafCol, 0.035, 3.2 + Math.random() * 1.6, 0.18);
+    }
+    // dust kicked up by a hard landing
+    if (p.landed && !p.inWater) {
+      this.particles.burst(p.pos.x, p.pos.y + 0.12, p.pos.z, 0xb9a98c, 7, 1.6, 0.05, 0.5);
+    }
+    // sprinting scuffs the ground behind you
+    if (p.sprinting && p.onGround && !p.inWater && !p.flying && Math.random() < dt * 14) {
+      const back = new THREE.Vector3(Math.sin(p.yaw) * 0.7, 0.15, Math.cos(p.yaw) * 0.7);
+      this.particles.spawn(p.pos.x + back.x, p.pos.y + 0.1, p.pos.z + back.z,
+        (Math.random() - 0.5) * 0.8, 0.5 + Math.random() * 0.4, (Math.random() - 0.5) * 0.8,
+        0xa89678, 0.045, 0.5, 0.6);
+    }
+    // creative flight leaves a soft speed-line trail
+    if (p.flying && Math.hypot(p.vel.x, p.vel.z) > 4 && Math.random() < dt * 26) {
+      this.particles.spawn(
+        p.pos.x - p.vel.x * 0.06 + (Math.random() - 0.5) * 0.5,
+        p.pos.y + 0.3 + (Math.random() - 0.5) * 0.6,
+        p.pos.z - p.vel.z * 0.06 + (Math.random() - 0.5) * 0.5,
+        -p.vel.x * 0.05, -0.1, -p.vel.z * 0.05,
+        Math.random() < 0.5 ? 0xd8ecff : 0xbcd8f0, 0.035, 0.5, 0);
+    }
+
     // floating motes near torches / lava
     if (Math.random() < dt * 8) {
       const r = 9;
@@ -2281,6 +2630,8 @@ export class Game {
     // ensure ground
     this.player.respawn(sp);
     this._deathShown = false;
+    this.death = null;
+    document.body.classList.remove('dying');
     this.ui.hideDeath();
     this.requestPointerLock();
   }
@@ -2384,6 +2735,28 @@ export class Game {
       vel ${p.vel.x.toFixed(1)} ${p.vel.y.toFixed(1)} ${p.vel.z.toFixed(1)} · ground ${p.onGround}
     `;
   }
+}
+
+/** Simple colour for non-block items held by the third-person avatar. */
+function avatarItemTint(id) {
+  const t = {
+    stick: 0x8a6a45, coal: 0x2a2a30, torch: 0xffb648, lantern: 0xffbd45,
+    raw_copper: 0xc9743c, raw_iron: 0xc4b7a4, raw_gold: 0xf0c04a,
+    copper_ingot: 0xc9743c, iron_ingot: 0xd6cdc0, gold_ingot: 0xf0c04a,
+    aurorite: 0x5fe0d0, glimmer_shard: 0xc77bf5, sunberry: 0xe8563f,
+    raw_meat: 0xd0685f, cooked_meat: 0x9c5a30, raw_fowl: 0xe0a898,
+    cooked_fowl: 0xc98a44, berry_pie: 0xd6a860, mush_stew: 0x8a5a34,
+    shears: 0xd6cdc0, bucket: 0x8a8c95,
+  }[id];
+  if (t) return t;
+  if (id.startsWith('pick') || id.startsWith('axe') || id.startsWith('shovel') || id.startsWith('blade')) {
+    if (id.includes('aurorite')) return 0x5fe0d0;
+    if (id.includes('iron')) return 0xd6cdc0;
+    if (id.includes('copper')) return 0xc9743c;
+    if (id.includes('stone')) return 0x8d8f96;
+    return 0xb08d64;
+  }
+  return 0xb0b0b0;
 }
 
 /** Signed shortest delta from angle a to angle b, in radians. */
