@@ -979,12 +979,30 @@ const cr = await page.evaluate(async () => {
   out.missing = Object.keys(ITEM).filter(i => !seen.has(i)).length;
   out.emptyCats = CREATIVE_CATS.filter(c => !CREATIVE_PALETTE[c.id].length).length;
   ui.open('inventory');
-  out.hasPalette = !!document.querySelector('.cpalette');
+  // the palette lives behind the category tabs, so switch to one first
   out.tabs = document.querySelectorAll('.ctab').length;
+  document.querySelector('.ctab').click();
+  out.hasPalette = !!document.querySelector('.cpalette');
   out.tiles = document.querySelectorAll('.cpalette .cslot').length;
-  document.querySelector('.cpalette .cslot').click();
+  // plain click hands over a SINGLE item... (slots respond to mousedown)
+  const md = (el, shift = false) => el.dispatchEvent(
+    new MouseEvent('mousedown', { bubbles: true, shiftKey: shift }));
+  md(document.querySelector('.cpalette .cslot'));
+  out.grabbedOne = ui.cursorStack ? ui.cursorStack.count : 0;
+  // ...clicking a DIFFERENT tile replaces what the cursor holds...
+  const tiles = document.querySelectorAll('.cpalette .cslot');
+  const otherId = [...tiles].find(t => t.dataset.item !== ui.cursorStack.id).dataset.item;
+  const tileFor = (id) => document.querySelector(`.cpalette .cslot[data-item="${id}"]`);
+  md(tileFor(otherId));
+  out.replaced = ui.cursorStack.id === otherId && ui.cursorStack.count === 1;
+  // ...and shift+click hands over a full stack (re-query: the panel re-renders)
+  md(tileFor(otherId), true);
   out.grabbedStack = ui.cursorStack ? ui.cursorStack.count : 0;
+  // clicking the empty part of the palette throws the held stack away
+  md(document.querySelector('.chint'));
+  out.discarded = ui.cursorStack === null;
   ui.cursorStack = null;
+  ui.inventoryTab = 'inventory';   // leave the panel on the normal tab
   ui.close();
   g.mode = wasMode; g.player.creative = wasCre;
   out.noArtisan = !document.body.innerHTML.includes('Artisan');
@@ -1006,8 +1024,12 @@ check('creative palette offers every item', cr.palette === cr.registry && cr.mis
 check('creative palette has no duplicates', cr.dupes === 0, `${cr.dupes} dupes`);
 check('creative categories are all populated', cr.emptyCats === 0 && cr.tabs >= 6,
   `${cr.tabs} tabs, ${cr.emptyCats} empty`);
-check('creative palette renders and hands out stacks', cr.hasPalette && cr.tiles > 0 && cr.grabbedStack > 1,
-  `${cr.tiles} tiles, grabbed ${cr.grabbedStack}`);
+check('creative palette renders behind its category tabs', cr.hasPalette && cr.tiles > 0,
+  `${cr.tiles} tiles`);
+check('creative click gives one item, shift+click a full stack',
+  cr.grabbedOne === 1 && cr.grabbedStack > 1, `one=${cr.grabbedOne} stack=${cr.grabbedStack}`);
+check('clicking another item replaces the held one', cr.replaced, 'replaced');
+check('clicking empty palette space discards the held item', cr.discarded, 'discarded');
 
 
 // =====================================================================
@@ -1307,8 +1329,9 @@ const r5 = await page.evaluate(async () => {
   out.terminates = lvlOf(fx + 20, fy, fz) === -1;
 
   // ---- clouds are one draw call each and tint with the sky ----
+  // (each cloud is a single sprite or merged mesh, never a pile of quads)
   let cloudMeshes = 0;
-  g.sky.clouds.traverse(o => { if (o.isMesh) cloudMeshes++; });
+  g.sky.clouds.traverse(o => { if (o.isMesh || o.isSprite) cloudMeshes++; });
   out.cloudGroups = g.sky.clouds.children.length;
   out.cloudMeshes = cloudMeshes;
   out.cloudsTint = !!g.sky.cloudMat;
@@ -1383,6 +1406,381 @@ const creaMine = await page.evaluate(() => {
 });
 check('releasing the button re-arms creative mining', creaMine.clearsOnRelease,
   'latch cleared in _cancelMining');
+
+// =====================================================================
+//  Round 6: torch light removal, wood doors, the off hand, the sleep
+//  cinematic, the swim pose, the new block set and UI alignment.
+// =====================================================================
+console.log('\n--- round 6: light, doors, off hand, sleep, swimming, UI ---');
+
+// ---- breaking an emitter must relight the CHUNKS AROUND IT too ----------
+const light = await page.evaluate(async () => {
+  const { B } = await import('/src/blocks.js');
+  const { ckey } = await import('/src/world.js');
+  const g = window.__EVERCRAFT.game, w = g.world;
+  const out = {};
+  // a column on the last block of a chunk, so a torch there lights the
+  // neighbouring chunk as well
+  const cx = Math.floor(g.player.pos.x / 16), cz = Math.floor(g.player.pos.z / 16);
+  const x = cx * 16 + 15, z = cz * 16 + 8;
+  const y = w.surfaceY(x, z);
+  const neigh = () => w.chunks.get(ckey(cx + 1, cz));
+  if (!neigh()) return { skipped: true };
+  w.setBlock(x, y, z, B.TORCH);
+  for (const c of w.chunks.values()) c.dirty = false;
+  out.placeDirtiesNeighbour = false;
+  w.setBlock(x, y, z, B.AIR);
+  out.breakDirtiesNeighbour = !!neigh().dirty;
+  // and the reverse: placing one must dirty it as well
+  for (const c of w.chunks.values()) c.dirty = false;
+  w.setBlock(x, y, z, B.TORCH);
+  out.placeDirtiesNeighbour = !!neigh().dirty;
+  w.setBlock(x, y, z, B.AIR);
+  // a plain (non-emitting) block in the middle of a chunk must NOT
+  // pointlessly relight its neighbours
+  const mx = cx * 16 + 8, mz = cz * 16 + 8, my = w.surfaceY(mx, mz);
+  for (const c of w.chunks.values()) c.dirty = false;
+  w.setBlock(mx, my, mz, B.STONE);
+  out.plainBlockIsLocal = !neigh().dirty;
+  w.setBlock(mx, my, mz, B.AIR);
+  return out;
+});
+check('breaking a torch relights the neighbouring chunks',
+  light.skipped || light.breakDirtiesNeighbour, 'neighbour marked dirty');
+check('placing a torch still relights the neighbouring chunks',
+  light.skipped || light.placeDirtiesNeighbour, 'neighbour marked dirty');
+check('a plain block edit stays local', light.skipped || light.plainBlockIsLocal,
+  'no needless relight');
+
+// ---- one door per wood -------------------------------------------------
+const doors = await page.evaluate(async () => {
+  const { B, BLOCKS, ITEM, DOOR_WOODS, DOOR_SETS, DOOR_ITEM, itemIdForBlock, blockDrop } =
+    await import('/src/blocks.js');
+  const { RECIPES } = await import('/src/recipes.js');
+  const g = window.__EVERCRAFT.game, w = g.world;
+  const out = { woods: DOOR_WOODS.slice() };
+  out.items = DOOR_WOODS.every(k => !!ITEM[DOOR_ITEM[k]] && !!ITEM[DOOR_ITEM[k]].block);
+  out.recipes = DOOR_WOODS.every(k => RECIPES.some(r => r.out === DOOR_ITEM[k]));
+  out.distinctBlocks = new Set(DOOR_WOODS.map(k => DOOR_SETS[k].closedLow[0])).size === 4;
+  out.distinctTex = new Set(DOOR_WOODS.map(k => BLOCKS[DOOR_SETS[k].closedLow[0]].tex)).size === 4;
+  out.names = DOOR_WOODS.map(k => BLOCKS[DOOR_SETS[k].closedLow[0]].n);
+  // place, open and break a pine door in the world
+  const x = Math.floor(g.player.pos.x) + 3, z = Math.floor(g.player.pos.z) + 3;
+  const y = w.surfaceY(x, z);
+  for (let dy = 0; dy < 3; dy++) w.setBlock(x, y + dy, z, 0);
+  w.setBlock(x, y - 1, z, B.STONE);
+  w.setBlock(x, y, z, DOOR_SETS.pine.closedLow[2]);
+  w.setBlock(x, y + 1, z, DOOR_SETS.pine.closedTop[2]);
+  g._toggleDoor(x, y, z);
+  out.opens = w.getBlock(x, y, z) === DOOR_SETS.pine.openLow[2] &&
+    w.getBlock(x, y + 1, z) === DOOR_SETS.pine.openTop[2];
+  out.dropsInKind = blockDrop(DOOR_SETS.pine.openLow[2]) === 'door_pine' &&
+    itemIdForBlock(DOOR_SETS.ember.closedTop[1]) === 'door_ember';
+  g._breakBlock(x, y + 1, z, w.getBlock(x, y + 1, z));
+  out.bothHalvesBreak = w.getBlock(x, y, z) === 0 && w.getBlock(x, y + 1, z) === 0;
+  // legacy saves still load: the old 'door_low' id maps to the aspen door
+  const { LEGACY_ITEM_ALIAS } = await import('/src/blocks.js');
+  out.legacy = LEGACY_ITEM_ALIAS.door_low === 'door_aspen';
+  return out;
+});
+check('every wood has its own door item + recipe',
+  doors.items && doors.recipes && doors.distinctBlocks, doors.names.join(', '));
+check('wood doors use their own textures', doors.distinctTex, '4 tile pairs');
+check('a wood door opens, drops in kind and breaks in both halves',
+  doors.opens && doors.dropsInKind && doors.bothHalvesBreak, 'pine door');
+check('pre-wood-door saves still load their doors', doors.legacy, 'door_low → door_aspen');
+
+// ---- the off hand ------------------------------------------------------
+const off = await page.evaluate(() => {
+  const g = window.__EVERCRAFT.game, p = g.player, ui = g.ui;
+  const out = {};
+  p.offhand = null;
+  g.cameraMode = 0;
+  g._updateHand(0.016);
+  out.hiddenWhenEmpty = g.offhandGroup.visible === false;
+  out.hudHiddenWhenEmpty = document.querySelector('#offhandSlot').style.display === 'none';
+  p.offhand = { id: 'torch', count: 5 };
+  g._updateHand(0.016);
+  ui.updateHUD(0.016);
+  out.shownWhenHolding = g.offhandGroup.visible === true;
+  out.hudShown = document.querySelector('#offhandSlot').style.display !== 'none';
+  // third person must not draw a first-person hand at all
+  g.cameraMode = 1;
+  g._updateHand(0.016);
+  out.hiddenInThirdPerson = g.offhandGroup.visible === false;
+  g.cameraMode = 0;
+  // X swaps hands
+  p.inv.slots[p.hotbarIdx] = { id: 'pick_stone', count: 1, dur: 140 };
+  g._onKeyDown('KeyX', { preventDefault() {} });
+  out.swapped = p.offhand.id === 'pick_stone' && p.held.id === 'torch';
+  g._onKeyDown('KeyX', { preventDefault() {} });
+  // the inventory exposes a real off-hand slot
+  ui.open('inventory');
+  const slot = document.querySelector('.slot.offhand[data-src="offhand"]');
+  out.hasSlot = !!slot;
+  out.slotShowsItem = !!(slot && slot.querySelector('img'));
+  ui.close();
+  // it survives a save/load round trip
+  const data = p.serialize();
+  p.offhand = null;
+  p.load(data);
+  out.persists = !!p.offhand && p.offhand.id === 'torch';
+  p.offhand = null;
+  g._updateHand(0.016);
+  return out;
+});
+check('the left hand is only drawn when it holds something',
+  off.hiddenWhenEmpty && off.shownWhenHolding && off.hiddenInThirdPerson,
+  'first person only, when filled');
+check('the HUD shows an off-hand box only when filled',
+  off.hudHiddenWhenEmpty && off.hudShown, 'toggles');
+check('the inventory has an off-hand slot', off.hasSlot && off.slotShowsItem, 'present');
+check('X swaps the hands', off.swapped, 'swapped');
+check('the off hand is saved with the player', off.persists, 'round-tripped');
+
+// ---- swimming ----------------------------------------------------------
+const swim = await page.evaluate(async () => {
+  const THREE = await import('/vendor/three.module.js');
+  const g = window.__EVERCRAFT.game, p = g.player;
+  const out = { yaws: [] };
+  const wasMode = g.cameraMode;
+  g.cameraMode = 1;
+  p.inWater = true; p.swimming = true; p.flying = false;
+  for (const yaw of [0, Math.PI / 2, Math.PI, -Math.PI / 2, 0.7]) {
+    p.yaw = yaw;
+    g._avSwim = 1;
+    g._updateAvatar(0.016);
+    g.avatar.updateMatrixWorld(true);
+    const m = g.avatar.matrixWorld;
+    const right = new THREE.Vector3(1, 0, 0).transformDirection(m);
+    const up = new THREE.Vector3(0, 1, 0).transformDirection(m);
+    const fwd = new THREE.Vector3(0, 0, -1).transformDirection(m);
+    const heading = new THREE.Vector3(-Math.sin(yaw), 0, -Math.cos(yaw));
+    out.yaws.push({
+      roll: +Math.abs(right.y).toFixed(3),
+      along: +up.dot(heading).toFixed(3),
+      faceDown: +fwd.y.toFixed(3),
+    });
+  }
+  // both arms stroke in first person, half a cycle apart
+  g.cameraMode = 0;
+  p.inv.slots[p.hotbarIdx] = { id: 'torch', count: 3 };
+  g._updateHand(0.016);
+  out.bothArms = g.offhandGroup.visible === true && !!g._handMesh && !!g._offhandMesh;
+  const poses = [];
+  for (let i = 0; i < 6; i++) {
+    g._updateHand(0.05);
+    poses.push([g._handMesh.rotation.x, g._offhandMesh.rotation.x]);
+  }
+  out.armsMove = poses.some(([a], i) => i && Math.abs(a - poses[i - 1][0]) > 0.02);
+  out.armsAlternate = poses.some(([a, b]) => Math.abs(a - b) > 0.5);
+  g.cameraMode = wasMode;
+  p.inWater = false; p.swimming = false; g._avSwim = 0;
+  return out;
+});
+check('the swimming avatar never rolls onto its side',
+  swim.yaws.every(y => y.roll < 0.1), swim.yaws.map(y => y.roll).join(','));
+check('the swimming avatar lies along its heading at every yaw',
+  swim.yaws.every(y => y.along > 0.9), swim.yaws.map(y => y.along).join(','));
+check('the swimming avatar is face down in the water',
+  swim.yaws.every(y => y.faceDown < -0.9), swim.yaws.map(y => y.faceDown).join(','));
+check('first person swims with BOTH arms',
+  swim.bothArms && swim.armsMove && swim.armsAlternate, 'alternating stroke');
+
+// ---- sleep cinematic ---------------------------------------------------
+const slp = await page.evaluate(async () => {
+  const { B, BLOCKS, BED_FOOT_DIR, BED_HEAD_DIR } = await import('/src/blocks.js');
+  const g = window.__EVERCRAFT.game, w = g.world, p = g.player;
+  const out = { stages: [], lids: [] };
+  const x = Math.floor(p.pos.x) + 6, z = Math.floor(p.pos.z) + 6;
+  const y = w.surfaceY(x, z);
+  for (let dx = -1; dx <= 2; dx++) for (let dz = -1; dz <= 2; dz++) {
+    w.setBlock(x + dx, y - 1, z + dz, B.PLANK_PINE);
+    w.setBlock(x + dx, y, z + dz, 0);
+  }
+  w.setBlock(x, y, z, BED_FOOT_DIR[1]);
+  w.setBlock(x + 1, y, z, BED_HEAD_DIR[1]);
+  p.health = 8;
+  p.creative = false;
+  g.worldTime = 600 * 0.82;                       // night
+  const before = { hp: p.health, time: g.worldTime, placed: p.stats.placed };
+  g._sleepAt(x, y, z, BLOCKS[BED_FOOT_DIR[1]]);
+  out.started = !!g.sleep;
+  out.spawnSet = !!p.spawnPoint;
+  out.overlayOn = !document.querySelector('#sleepCinema').classList.contains('hidden');
+  // interaction is paused: mining and placing must do nothing
+  g.mouse.left = true;
+  g._updateMining(0.1);
+  out.miningPaused = p.mining === null;
+  g._useAction();
+  out.placingPaused = p.stats.placed === before.placed;
+  g.mouse.left = false;
+  // step the cinematic through every stage
+  let camMoved = false;
+  const startCam = g.camera.position.clone();
+  for (let i = 0; i < 200 && g.sleep; i++) {
+    g._updateSleep(0.06);
+    g._updateCamera(0.06);
+    if (out.stages[out.stages.length - 1] !== g.sleep?.stage && g.sleep)
+      out.stages.push(g.sleep.stage);
+    if (g.sleep) out.lids.push(+g.sleep.lid.toFixed(2));
+    if (g.camera.position.distanceTo(startCam) > 0.2) camMoved = true;
+  }
+  out.camMoved = camMoved;
+  out.finished = !g.sleep;
+  out.healed = p.health > before.hp;
+  out.morning = +g.dayFraction().toFixed(3);
+  out.advanced = g.worldTime > before.time;
+  out.lidClosed = Math.max(...out.lids) > 0.95;
+  out.lidReopened = out.lids[out.lids.length - 1] < 0.2;
+  out.overlayOff = document.querySelector('#sleepCinema').classList.contains('hidden') ||
+    !document.body.classList.contains('sleeping');
+  return out;
+});
+check('sleeping starts a staged cinematic', slp.started && slp.stages.length >= 3 && slp.overlayOn,
+  `stages ${slp.stages.join('>')}`);
+check('the sleep camera moves the view onto the pillow', slp.camMoved, 'camera animated');
+check('the eyelids close and reopen', slp.lidClosed && slp.lidReopened,
+  `max ${Math.max(...slp.lids)} end ${slp.lids[slp.lids.length - 1]}`);
+check('interaction is paused while asleep', slp.miningPaused && slp.placingPaused, 'no mining/placing');
+check('sleeping heals the player', slp.healed, 'health restored');
+check('sleeping runs the clock to morning', slp.advanced && Math.abs(slp.morning - 0.30) < 0.01,
+  `day fraction ${slp.morning}`);
+check('the cinematic ends and hands control back', slp.finished && slp.overlayOff, 'overlay cleared');
+
+// ---- the new block set -------------------------------------------------
+const nb = await page.evaluate(async () => {
+  const { ITEM, BLOCKS, B, blockDrop } = await import('/src/blocks.js');
+  const { RECIPES, SMELT } = await import('/src/recipes.js');
+  const { CREATIVE_PALETTE } = await import('/src/creative.js');
+  const { TILE_NAMES } = await import('/src/textures.js');
+  const ids = ['mossy_bricks', 'cracked_bricks', 'smooth_stone', 'chiseled_sandstone',
+    'thatch', 'bookshelf', 'timber_frame', 'plaster', 'roof_tile', 'hearth',
+    'frost_brick', 'mud', 'dead_bush', 'reeds'];
+  const tiles = new Set(TILE_NAMES);
+  const inPalette = new Set(Object.values(CREATIVE_PALETTE).flat());
+  const missing = ids.filter(i => !ITEM[i]);
+  const noTex = ids.filter(i => {
+    const b = BLOCKS[ITEM[i]?.block];
+    if (!b || !b.tex) return true;
+    const names = typeof b.tex === 'string' ? [b.tex] : Object.values(b.tex);
+    return names.some(n => !tiles.has(n));
+  });
+  const noRecipe = ids.filter(i => !RECIPES.some(r => r.out === i) && !Object.values(SMELT).some(v => v[0] === i));
+  return {
+    count: ids.length,
+    missing, noTex, noRecipe,
+    notInPalette: ids.filter(i => !inPalette.has(i)),
+    hearthGlows: BLOCKS[B.HEARTH].light > 8,
+    dropsSelf: blockDrop(B.BOOKSHELF) === 'bookshelf',
+  };
+});
+check('the new blocks are registered and textured',
+  nb.missing.length === 0 && nb.noTex.length === 0,
+  `${nb.count} blocks${nb.missing.length ? ' missing ' + nb.missing : ''}${nb.noTex.length ? ' untextured ' + nb.noTex : ''}`);
+check('the new blocks are obtainable (recipe or smelt)', nb.noRecipe.length === 0,
+  nb.noRecipe.join(',') || 'all craftable');
+check('the new blocks appear in the creative palette', nb.notInPalette.length === 0,
+  nb.notInPalette.join(',') || 'all listed');
+check('the ember hearth is a light source', nb.hearthGlows, 'light 12');
+
+// ---- structures reach across chunk borders ------------------------------
+const span = await page.evaluate(async () => {
+  const { WorldGen } = await import('/src/worldgen.js');
+  const { B } = await import('/src/blocks.js');
+  const gen = new WorldGen(4242);
+  const MADE = new Set([B.STONE_BRICKS, B.MOSSY_BRICKS, B.CRACKED_BRICKS, B.SMOOTH_STONE,
+    B.PLANK_ASPEN, B.PLANK_PINE, B.PLANK_EMBER, B.PLANK_PALM, B.ROOF_TILE, B.THATCH,
+    B.TIMBER_FRAME, B.PLASTER, B.CRATE, B.SANDSTONE, B.CHISELED_SANDSTONE, B.FROST_BRICK,
+    B.HEARTH, B.BOOKSHELF, B.TILE_DARK]);
+  let found = 0, spilled = 0, kinds = new Set();
+  for (let cx = -8; cx < 8 && found < 8; cx++) {
+    for (let cz = -8; cz < 8 && found < 8; cz++) {
+      const st = gen.structureAt(cx, cz);
+      if (!st) continue;
+      found++; kinds.add(st.kind);
+      // does any neighbour chunk hold part of this build?
+      for (const [dx, dz] of [[1, 0], [-1, 0], [0, 1], [0, -1]]) {
+        const r = gen.generateChunk(cx + dx, cz + dz);
+        let n = 0;
+        for (let y = st.h; y < st.h + 12; y++)
+          for (let i = 0; i < 256; i++)
+            if (MADE.has(r.blocks[i + y * 256])) n++;
+        if (n > 0) { spilled++; break; }
+      }
+    }
+  }
+  // determinism: the same chunk generated twice is identical
+  const a = gen.generateChunk(2, 3).blocks, b = new WorldGen(4242).generateChunk(2, 3).blocks;
+  let same = true;
+  for (let i = 0; i < a.length; i++) if (a[i] !== b[i]) { same = false; break; }
+  return { found, spilled, kinds: [...kinds], same };
+});
+check('structures are painted across chunk borders', span.found > 0 && span.spilled > 0,
+  `${span.spilled}/${span.found} builds overlap a neighbour`);
+check('cross-chunk structures stay deterministic', span.same, 'identical regen');
+
+// ---- UI alignment and fit ----------------------------------------------
+const layout = await page.evaluate(() => {
+  const g = window.__EVERCRAFT.game, ui = g.ui;
+  const rect = s => { const el = document.querySelector(s); return el ? el.getBoundingClientRect() : null; };
+  const out = {};
+  const fits = () => {
+    const p = document.querySelector('.panel');
+    const tc = document.querySelector('.inventory-tab-content');
+    return {
+      inViewport: p.getBoundingClientRect().height <= window.innerHeight + 1,
+      noScroll: !tc || tc.scrollHeight <= tc.clientHeight + 1,
+    };
+  };
+  g.mode = 'survival'; g.player.creative = false;
+  ui.inventoryTab = 'inventory';
+  ui.showBook = false;
+  ui.open('inventory');
+  const inv = rect('.grid.inv'), hot = rect('.pinned-hotbar .grid.hot');
+  out.invAligned = Math.abs(inv.left - hot.left) < 1.5 && Math.abs(inv.width - hot.width) < 1.5;
+  out.invRows = document.querySelectorAll('.grid.inv .slot').length;
+  Object.assign(out, fits());
+  ui.showBook = true; ui.render();
+  const wb = fits();
+  out.bookFits = wb.inViewport && wb.noScroll;
+  ui.showBook = false;
+  ui.close();
+  // chest: three stacked grids on identical columns
+  const c = { kind: 'crate', items: new Array(27).fill(null) };
+  ui.open('crate', { container: c, pos: [0, 0, 0] });
+  const grids = [...document.querySelectorAll('.pbody .grid')].map(el => el.getBoundingClientRect());
+  out.chestAligned = grids.length === 3 &&
+    grids.every(r => Math.abs(r.left - grids[0].left) < 1.5 && Math.abs(r.width - grids[0].width) < 1.5);
+  out.chestFits = document.querySelector('.panel').getBoundingClientRect().height <= window.innerHeight + 1;
+  ui.close();
+  // creative palette
+  g.mode = 'creative'; g.player.creative = true;
+  ui.open('inventory');
+  document.querySelector('.ctab').click();
+  const cf = fits();
+  out.creativeFits = cf.inViewport;
+  out.creativeScrolls = !!document.querySelector('.cpalette');
+  ui.inventoryTab = 'inventory';
+  ui.close();
+  g.mode = 'survival'; g.player.creative = false;
+  // the recipe book icon sits to the LEFT of the inventory's 2x2 grid
+  ui.open('inventory');
+  const row = document.querySelector('.invcraft .craftrow');
+  out.bookLeftOfGrid = !!row &&
+    row.querySelector('.bookbtn').getBoundingClientRect().left <
+    row.querySelector('.cgrid').getBoundingClientRect().left;
+  ui.close();
+  return out;
+});
+check('backpack and quick bar share the same columns', layout.invAligned, 'aligned');
+check('the inventory fits on screen without scrolling',
+  layout.inViewport && layout.noScroll, 'no scrollbar');
+check('the inventory still fits with the recipe book open', layout.bookFits, 'fits');
+check('the chest screen aligns its three grids', layout.chestAligned, 'aligned');
+check('the chest screen fits on screen', layout.chestFits, 'fits');
+check('the creative palette fits on screen', layout.creativeFits && layout.creativeScrolls, 'fits');
+check('the recipe book icon sits left of the inventory grid', layout.bookLeftOfGrid, 'left');
 
 await browser.close();
 console.log(`\n=== ${ok.length} passed, ${fails.length} failed ===`);

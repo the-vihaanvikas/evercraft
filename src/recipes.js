@@ -65,7 +65,11 @@ shaped('basics', 'torch', 4, ['C', 'S'], { C: '#coal', S: 'stick' });
 shaped('basics', 'smelter', 1, ['SSS', 'S S', 'SSS'], { S: '#stone' }, true);
 shaped('basics', 'crate', 1, ['PPP', 'P P', 'PPP'], { P: '#planks' }, true);
 shaped('basics', 'ladder', 3, ['S S', 'SSS', 'S S'], { S: 'stick' }, true);
-shaped('basics', 'door_low', 3, ['PP', 'PP', 'PP'], { P: '#planks' }, true);
+// one door recipe per wood, so the door you craft matches the planks you used
+for (const plank of TAGS['#planks']) {
+  const wood = plank.replace('plank_', '');
+  shaped('basics', `door_${wood}`, 3, ['PP', 'PP', 'PP'], { P: plank }, true);
+}
 shaped('basics', 'bed', 1, ['WWW', 'PPP'], { W: '#wool', P: '#planks' }, true);
 shaped('basics', 'shears', 1, [' I', 'I '], { I: 'iron_ingot' }, true);
 shapeless('basics', 'charcoal', 1, [['#logs', 1], ['ember_dust', 1]], false);
@@ -125,10 +129,23 @@ function dyeFor(w) {
   return { wool_red: 'sunberry', wool_amber: 'ember_dust', wool_teal: 'aurorite', wool_violet: 'glimmer_shard', wool_slate: 'coal' }[w];
 }
 shaped('build', 'wool_white', 1, ['TT', 'TT'], { T: 'string' });
+// ---- second-wave building blocks
+shapeless('build', 'mossy_bricks', 1, [['stone_bricks', 1], ['short_grass', 1]], false);
+shapeless('build', 'cracked_bricks', 1, [['stone_bricks', 1], ['gravel', 1]], false);
+shaped('build', 'smooth_stone', 4, ['SS', 'SS'], { S: 'slab_stone' }, true);
+shaped('build', 'chiseled_sandstone', 2, ['S', 'S'], { S: 'sandstone' }, true);
+shaped('build', 'thatch', 1, ['EE', 'EE'], { E: 'seeds' });
+shaped('build', 'bookshelf', 1, ['PPP', 'LLL', 'PPP'], { P: '#planks', L: 'leather' }, true);
+shaped('build', 'plaster', 4, ['CC', 'CC'], { C: 'clay_lump' });
+shaped('build', 'timber_frame', 4, ['PLP', 'LPL', 'PLP'], { P: 'plaster', L: 'stick' }, true);
+shaped('build', 'roof_tile', 4, ['BB', 'BB'], { B: 'brick' }, true);
+shaped('build', 'frost_brick', 4, ['II', 'II'], { I: 'packed_ice' }, true);
+shapeless('build', 'mud', 1, [['dirt', 1], ['clay_lump', 1]], false);
 
 // -------------------------------------------------------------------- light
 shaped('light', 'lantern', 1, [' I ', 'ILI', ' I '], { I: 'iron_ingot', L: 'lumen' }, true);
 shaped('light', 'lumen', 1, ['GG', 'GG'], { G: 'glimmer_shard' }, true);
+shaped('light', 'hearth', 1, ['SSS', 'SCS', 'SSS'], { S: '#stone', C: '#coal' }, true);
 shapeless('light', 'torch', 8, [['stick', 2], ['ember_dust', 1]], false);
 
 // --------------------------------------------------------------------- food
@@ -140,6 +157,8 @@ shapeless('food', 'mush_stew', 1, [['mushroom', 2], ['sunberry', 1], ['clay_lump
 shapeless('deco', 'glass', 1, [['sand', 1], ['#coal', 1]], true);
 shapeless('deco', 'berry_bush', 1, [['sunberry', 3], ['seeds', 1]], false);
 shapeless('deco', 'tall_grass', 2, [['seeds', 1]], false);
+shapeless('deco', 'reeds', 2, [['seeds', 1], ['tall_grass', 1]], false);
+shapeless('deco', 'dead_bush', 1, [['stick', 2]], false);
 
 export const RECIPES = R;
 
@@ -157,7 +176,8 @@ export const SMELT = {
   log_pine: ['charcoal', 1, 7],
   log_palm: ['charcoal', 1, 7],
   cactus: ['ember_dust', 1, 5],
-  stone: ['slab_stone', 1, 6],
+  mud: ['bricks', 1, 6],
+  stone: ['smooth_stone', 1, 6],
   rubble: ['stone', 1, 6],
   ore_aurorite: ['aurorite', 1, 12],
   ore_glimmer: ['glimmer_shard', 2, 14],
@@ -167,7 +187,9 @@ export const FUEL = {
   coal: 8, charcoal: 7, coal_block: 80, ember_dust: 4,
   plank_aspen: 1.5, plank_ember: 1.5, plank_pine: 1.5, plank_palm: 1.5,
   log_aspen: 2.2, log_ember: 2.2, log_pine: 2.2, log_palm: 2.2,
-  stick: 0.5, bench: 3, crate: 4, ladder: 1, door_low: 2,
+  stick: 0.5, bench: 3, crate: 4, ladder: 1,
+  door_aspen: 2, door_ember: 2, door_pine: 2, door_palm: 2,
+  bookshelf: 3, thatch: 1.2,
 };
 
 export function tagMatches(tag, itemId) {

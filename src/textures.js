@@ -335,6 +335,168 @@ T.stone_bricks = p => {
 T.chiseled = p => { p.fill(P.stone).grain(P.stoneD, P.stoneL, .25); p.border(P.stoneD); p.rect(3, 3, 10, 10, P.stoneL); p.rect(4, 4, 8, 8, P.stone); p.blob(8, 8, 3, P.stoneD, .3); p.rect(6, 6, 4, 4, P.stoneL); return p; };
 T.tile_dark = p => { p.fill(P.deep).grain(P.deepD, P.deepL, .25); p.hline(7, 0, 15, '#2b2d34'); p.vline(7, 0, 15, '#2b2d34'); p.hline(8, 0, 15, P.deepL); p.vline(8, 0, 15, P.deepL); p.border('#2b2d34'); return p; };
 T.slab_stone = p => { p.fill(P.stoneL).grain(P.stone, '#b6b8bf', .3); p.border(P.stoneD); p.hline(1, 1, 14, '#c4c6cd'); return p; };
+// ---- second-wave building blocks -----------------------------------------
+T.mossy_bricks = p => {
+  T.stone_bricks(p);
+  for (let i = 0; i < 46; i++) {
+    const x = (p.r() * 16) | 0, y = (p.r() * 16) | 0;
+    p.set(x, y, p.r() < .5 ? P.turfD : P.turfP);
+  }
+  return p.blob(3, 11, 2, P.turfP, .8).blob(12, 4, 2, P.turfD, .8);
+};
+T.cracked_bricks = p => {
+  T.stone_bricks(p);
+  for (let i = 0; i < 3; i++) {
+    let x = 1 + ((p.r() * 14) | 0), y = 0;
+    while (y < 16) {
+      p.set(x, y, P.deepD);
+      y += 1;
+      x += p.r() < .5 ? -1 : 1;
+      x = Math.max(0, Math.min(15, x));
+    }
+  }
+  return p.spark(P.stoneD, 12);
+};
+T.smooth_stone = p => {
+  p.fill('#9a9ca3').grain('#8d8f96', '#adafb6', .22);
+  p.hline(0, 0, 15, '#b4b6bd'); p.hline(15, 0, 15, '#7f8188');
+  return p.spark('#a8aab1', 6);
+};
+T.chiseled_sandstone = p => {
+  p.fill(P.sand).grain(P.sandD, P.sandL, .2);
+  p.rect(0, 0, 16, 2, P.sandL); p.rect(0, 14, 16, 2, P.sandD);
+  // carved sun glyph
+  p.rect(3, 4, 10, 8, P.sandD);
+  p.rect(4, 5, 8, 6, P.sandL);
+  p.blob(8, 8, 2, P.sandD, .2);
+  for (const [x, y] of [[8, 4], [8, 11], [4, 8], [11, 8]]) p.set(x, y, '#a8895a');
+  return p;
+};
+// thatch: bundled straw, laid flat on top and combed downward on the sides
+T.thatch_top = p => {
+  p.fill('#c9a24a');
+  for (let y = 0; y < 16; y++) for (let x = 0; x < 16; x++) {
+    const r = p.r();
+    p.set(x, y, r < .3 ? '#a8842f' : r < .62 ? '#c9a24a' : '#e3c377');
+  }
+  for (let y = 1; y < 16; y += 4) p.hline(y, 0, 15, '#8f6f26');
+  return p;
+};
+T.thatch_side = p => {
+  p.fill('#c9a24a');
+  for (let x = 0; x < 16; x++) {
+    const c = p.r() < .34 ? '#a8842f' : p.r() < .6 ? '#e3c377' : '#c9a24a';
+    p.vline(x, 0, 15, c);
+  }
+  for (let y = 3; y < 16; y += 5) { p.hline(y, 0, 15, '#7d611f'); p.hline(y + 1, 0, 15, '#efd692'); }
+  return p.spark('#8f6f26', 10);
+};
+T.bookshelf = p => {
+  planks(p, P.aspen, P.aspenD, '#e6dbc3');
+  const spines = ['#a8433a', '#3a6ea8', '#4f9e5c', '#c9843c', '#8a5cc0', '#d8b24a'];
+  for (const shelfY of [2, 9]) {
+    p.rect(1, shelfY - 1, 14, 6, '#3a2a1c');
+    let x = 2;
+    while (x < 14) {
+      const w = 1 + ((p.r() * 2) | 0);
+      const h = 4 + ((p.r() * 2) | 0);
+      const c = spines[(p.r() * spines.length) | 0];
+      p.rect(x, shelfY + (5 - h), Math.min(w, 14 - x), h, c);
+      p.vline(x, shelfY + (5 - h), shelfY + 4, c);
+      x += w + 1;
+    }
+  }
+  p.hline(1, 1, 14, '#a89a7e'); p.hline(8, 1, 14, '#6d5033'); p.hline(15, 0, 15, '#6d5033');
+  return p;
+};
+T.plaster = p => {
+  p.fill('#e0d8c4').grain('#cfc5ad', '#f2ecdd', .3);
+  return p.spark('#c2b79c', 8);
+};
+T.timber_frame = p => {
+  T.plaster(p);
+  // dark beams: a frame plus a diagonal brace
+  p.rect(0, 0, 16, 2, '#5e4930'); p.rect(0, 14, 16, 2, '#5e4930');
+  p.rect(0, 0, 2, 16, '#5e4930'); p.rect(14, 0, 2, 16, '#5e4930');
+  p.line(2, 13, 13, 2, '#6b5637');
+  p.line(3, 13, 14, 2, '#7d6642');
+  p.hline(1, 0, 15, '#7d6642'); p.hline(14, 0, 15, '#48371f');
+  return p;
+};
+T.roof_tile = p => {
+  p.fill(P.brickD);
+  for (let row = 0; row < 4; row++) {
+    const y = row * 4, off = row % 2 ? 3 : 0;
+    for (let bx = -1; bx < 4; bx++) {
+      const x = bx * 6 + off;
+      p.rect(x, y, 5, 3, '#a5533d');
+      p.hline(y, Math.max(0, x), Math.min(15, x + 4), '#c46b53');
+      p.hline(y + 2, Math.max(0, x), Math.min(15, x + 4), '#7d3b2b');
+    }
+  }
+  return p.spark('#8d4433', 8);
+};
+T.hearth_side = p => {
+  T.stone_bricks(p);
+  p.rect(4, 8, 8, 6, '#241c16');
+  p.rect(5, 10, 6, 4, '#b83a12');
+  p.rect(6, 12, 4, 2, '#ffb648');
+  return p;
+};
+T.hearth_top = p => {
+  p.fill('#4a453f').grain('#332f2b', '#5c564e', .4);
+  p.blob(8, 8, 5, '#7d2f10', .3);
+  p.blob(8, 8, 3, '#e8622a', .35);
+  p.blob(8, 8, 2, '#ffb648', .3);
+  for (let i = 0; i < 10; i++) p.set((p.r() * 16) | 0, (p.r() * 16) | 0, p.r() < .5 ? '#ffe08a' : '#3a3630');
+  return p;
+};
+T.frost_brick = p => {
+  p.fill('#cfe4f2');
+  for (let row = 0; row < 4; row++) {
+    const y = row * 4, off = row % 2 ? 4 : 0;
+    for (let bx = -1; bx < 3; bx++) {
+      const x = bx * 8 + off;
+      p.rect(x, y, 7, 3, '#e8f4fb');
+      p.hline(y, Math.max(0, x), Math.min(15, x + 6), '#ffffff');
+      for (let i = 0; i < 3; i++) p.set(x + ((p.r() * 7) | 0), y + ((p.r() * 3) | 0), '#b7d6ea');
+    }
+  }
+  return p;
+};
+T.mud = p => {
+  p.fill('#4d3b2a').grain('#3a2c1f', '#634c35', .45);
+  for (let i = 0; i < 6; i++) p.blob((p.r() * 16) | 0, (p.r() * 16) | 0, 2, '#332619', .6);
+  for (let i = 0; i < 5; i++) p.set((p.r() * 16) | 0, (p.r() * 16) | 0, '#7b6a52');
+  return p;
+};
+T.dead_bush = p => {
+  p.clear();
+  const c = '#7a5a34', cd = '#5c421f', cl = '#9a7a4c';
+  p.vline(8, 6, 15, c);
+  for (const [x0, y0, x1, y1] of [[8, 11, 4, 7], [8, 12, 12, 8], [8, 9, 5, 4], [8, 10, 12, 5]]) {
+    p.line(x0, y0, x1, y1, p.r() < .5 ? cd : cl);
+  }
+  p.set(4, 6, cl); p.set(12, 7, cl); p.set(8, 5, cd);
+  return p;
+};
+T.reeds = p => {
+  p.clear();
+  for (let i = 0; i < 7; i++) {
+    const x = 2 + ((p.r() * 12) | 0);
+    const h = 9 + ((p.r() * 7) | 0);
+    const c = p.r() < .4 ? '#3f8a4a' : p.r() < .8 ? '#589f52' : '#7cbf62';
+    for (let k = 0; k < h; k++) {
+      const y = 15 - k;
+      if (y < 0) break;
+      p.set(x + (k > h * 0.7 ? (i % 2 ? 1 : -1) : 0), y, c);
+    }
+    // seed head
+    p.set(x, 15 - h, '#c9a24a');
+    p.set(x, Math.max(0, 15 - h - 1), '#e3c377');
+  }
+  return p;
+};
 T.lumen = p => { p.fill(P.lumen); p.grain('#ffd982', P.lumenL, .4); for (let i = 0; i < 6; i++) p.blob((p.r() * 16) | 0, (p.r() * 16) | 0, 2, P.lumenL, .6); return p.spark('#ffffff', 12); };
 
 function woolTile(p, base, dark, light) {
@@ -477,21 +639,36 @@ T.ladder = p => {
   for (let y = 2; y < 16; y += 5) { p.rect(4, y, 8, 2, '#a8825a'); p.hline(y, 4, 11, '#c2a173'); }
   return p;
 };
-T.door_low = p => {
-  p.fill('#8a6a45');
-  planksDoor(p);
-  p.rect(11, 6, 3, 3, '#3a3c44'); p.rect(12, 7, 1, 1, '#d8b24a');
-  return p;
+// ---- doors: one pair of tiles per wood -----------------------------------
+// Palette per wood: [face, dark seam, light highlight, frame/iron accent]
+const DOOR_WOOD_COL = {
+  aspen: ['#cfc0a1', '#a08c6b', '#e6dbc3', '#5e4930'],
+  ember: ['#a55c42', '#7d4230', '#c2765a', '#4a2418'],
+  pine: ['#96714b', '#6d5033', '#b08d64', '#4a3521'],
+  palm: ['#bda079', '#977c58', '#d6bd99', '#6a563a'],
 };
-T.door_top = p => {
-  p.fill('#8a6a45');
-  planksDoor(p);
-  p.rect(3, 3, 10, 6, '#5e4930');
-  p.rect(4, 4, 8, 4, P.glassT); p.rect(4, 4, 8, 4, '#cfe9f5');
-  p.line(5, 7, 10, 4, '#ffffff', 140);
-  p.vline(8, 4, 7, '#5e4930');
-  return p;
-};
+for (const wood of Object.keys(DOOR_WOOD_COL)) {
+  const [base, dark, light, frame] = DOOR_WOOD_COL[wood];
+  T[`door_${wood}_low`] = p => {
+    p.fill(base);
+    planksDoor(p, base, dark, light, frame);
+    // handle plate + knob
+    p.rect(11, 6, 3, 3, '#3a3c44'); p.rect(12, 7, 1, 1, '#d8b24a');
+    // lower cross brace so the two halves read as one carpentered door
+    p.hline(12, 2, 13, dark); p.hline(13, 2, 13, light);
+    return p;
+  };
+  T[`door_${wood}_top`] = p => {
+    p.fill(base);
+    planksDoor(p, base, dark, light, frame);
+    // glazed window with a mullion
+    p.rect(3, 3, 10, 6, frame);
+    p.rect(4, 4, 8, 4, P.glassT); p.rect(4, 4, 8, 4, '#cfe9f5');
+    p.line(5, 7, 10, 4, '#ffffff', 140);
+    p.vline(8, 4, 7, frame);
+    return p;
+  };
+}
 T.bed_foot = p => {
   p.fill('#b43f3a').grain('#8f302d', '#d75a52', .18);
   p.rect(0, 0, 16, 3, '#e7dfd2');
@@ -508,12 +685,14 @@ T.bed_head = p => {
   p.rect(2, 9, 12, 4, '#c94a43');
   return p.border('#762722');
 };
-function planksDoor(p) {
-  for (let x = 0; x < 16; x++) for (let y = 0; y < 16; y++) if (p.r() < .18) p.set(x, y, p.r() < .5 ? '#6f563a' : '#a8825a');
-  p.border('#5e4930');
-  p.vline(1, 1, 14, '#a8825a');
-  p.hline(1, 1, 14, '#a8825a');
-  p.rect(0, 5, 16, 2, '#6f563a'); p.hline(5, 0, 15, '#a8825a');
+function planksDoor(p, base = '#8a6a45', dark = '#6f563a', light = '#a8825a', frame = '#5e4930') {
+  for (let x = 0; x < 16; x++) for (let y = 0; y < 16; y++) if (p.r() < .18) p.set(x, y, p.r() < .5 ? dark : light);
+  // vertical board seams
+  for (const x of [5, 10]) p.vline(x, 1, 14, dark);
+  p.border(frame);
+  p.vline(1, 1, 14, light);
+  p.hline(1, 1, 14, light);
+  p.rect(0, 5, 16, 2, dark); p.hline(5, 0, 15, light);
 }
 
 // plants (cross)
@@ -850,7 +1029,9 @@ export function modelIconDataURL(key, model, texName, scale = 3) {
     const pad = model === 'torch' ? S * 0.08 : S * 0.04;
     if (tile) ctx.drawImage(tile, pad, pad, S - pad * 2, S - pad * 2);
   } else if (model === 'door') {
-    const top = drawToCanvas('door_top', scale), low = drawToCanvas('door_low', scale);
+    const lowName = String(texName || 'door_aspen_low');
+    const topName = lowName.replace(/_low$/, '_top');
+    const top = drawToCanvas(topName, scale), low = drawToCanvas(lowName, scale);
     const w = S * 0.48, x = (S - w) / 2, h = S * 0.39;
     if (top) ctx.drawImage(top, x, S * 0.08, w, h);
     if (low) ctx.drawImage(low, x, S * 0.47, w, h);

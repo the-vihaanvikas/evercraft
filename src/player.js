@@ -3,7 +3,7 @@
 import * as THREE from '../vendor/three.module.js';
 import {
   B, BLOCKS, block, isSolid, ITEM, itemDef, miningTime, canHarvest, blockDrop,
-  WORLD_H, SEA_LEVEL, ARMOR_SLOTS,
+  WORLD_H, SEA_LEVEL, ARMOR_SLOTS, LEGACY_ITEM_ALIAS,
 } from './blocks.js';
 
 export const HOTBAR = 9;
@@ -101,6 +101,9 @@ export class Player {
     this.xp = 0; this.level = 0;
     this.inv = new Inventory();
     this.armor = { helm: null, chest: null, legs: null, boots: null };
+    // Off hand. Holds one stack that rides in the player's left hand; it is
+    // only drawn in first person when something is actually in it.
+    this.offhand = null;
     this.hotbarIdx = 0;
     this.invalidPlaceTimer = 0;
     this.mining = null;       // {x,y,z,progress,total}
@@ -120,6 +123,48 @@ export class Player {
 
   get held() { return this.inv.slots[this.hotbarIdx]; }
   get heldId() { const h = this.held; return h ? h.id : null; }
+  get offhandId() { return this.offhand ? this.offhand.id : null; }
+
+  /**
+   * True when the player should be animated in a prone swimming pose: either
+   * actively sprint-swimming, or simply moving through water off the floor.
+   */
+  get swimPose() {
+    if (this.flying || !this.inWater) return false;
+    if (this.swimming) return true;
+    return !this.onGround && Math.hypot(this.vel.x, this.vel.z) > 1.4;
+  }
+
+  /** Swap the main-hand stack with the off-hand stack. */
+  swapHands() {
+    const main = this.inv.slots[this.hotbarIdx];
+    this.inv.slots[this.hotbarIdx] = this.offhand || null;
+    this.offhand = main || null;
+  }
+
+  /**
+   * The stack an action should use, preferring the main hand and falling back
+   * to the off hand. `slot` is the hotbar index or the string 'offhand', so
+   * callers can consume from the right place.
+   * @param {(stack:object)=>boolean} [want] optional filter
+   */
+  useSlot(want) {
+    const main = this.held;
+    if (main && (!want || want(main))) return { stack: main, slot: this.hotbarIdx };
+    if (this.offhand && (!want || want(this.offhand))) return { stack: this.offhand, slot: 'offhand' };
+    return { stack: null, slot: null };
+  }
+
+  /** Remove `n` items from a hotbar index or the off hand. */
+  consumeSlot(slot, n = 1) {
+    const s = slot === 'offhand' ? this.offhand : this.inv.slots[slot];
+    if (!s) return;
+    s.count -= n;
+    if (s.count <= 0) {
+      if (slot === 'offhand') this.offhand = null;
+      else this.inv.slots[slot] = null;
+    }
+  }
 
   eyePos(out) {
     return (out || new THREE.Vector3()).set(this.pos.x, this.pos.y + EYE - (this.sneaking ? 0.22 : 0), this.pos.z);
@@ -437,7 +482,7 @@ export class Player {
   }
 
   eat(slotIdx) {
-    const s = this.inv.slots[slotIdx];
+    const s = slotIdx === 'offhand' ? this.offhand : this.inv.slots[slotIdx];
     if (!s) return false;
     const d = itemDef(s.id);
     if (!d || !d.food) return false;
@@ -445,7 +490,10 @@ export class Player {
     this.hunger = Math.min(this.maxHunger, this.hunger + d.food);
     this.saturation = Math.min(this.hunger, this.saturation + (d.sat || 0));
     s.count--;
-    if (s.count <= 0) this.inv.slots[slotIdx] = null;
+    if (s.count <= 0) {
+      if (slotIdx === 'offhand') this.offhand = null;
+      else this.inv.slots[slotIdx] = null;
+    }
     if (s.id === 'mush_stew') this.inv.add('clay_lump', 1);
     this.audio.eat();
     return true;
@@ -477,7 +525,8 @@ export class Player {
       yaw: this.yaw, pitch: this.pitch,
       health: this.health, hunger: this.hunger, saturation: this.saturation,
       air: this.air, xp: this.xp, level: this.level,
-      inv: this.inv.slots, armor: this.armor, hotbarIdx: this.hotbarIdx,
+      inv: this.inv.slots, armor: this.armor, offhand: this.offhand,
+      hotbarIdx: this.hotbarIdx,
       creative: this.creative, spawnPoint: this.spawnPoint,
       deaths: this.deaths, stats: this.stats,
     };
@@ -491,6 +540,13 @@ export class Player {
     this.inv.slots = d.inv || this.inv.slots;
     while (this.inv.slots.length < INV_SIZE) this.inv.slots.push(null);
     this.armor = d.armor || this.armor;
+    this.offhand = d.offhand || null;
+    // Saves written before an item was renamed (doors gained wood types) still
+    // hold the old id; translate rather than dropping the stack.
+    const fix = (st) => { if (st && LEGACY_ITEM_ALIAS[st.id]) st.id = LEGACY_ITEM_ALIAS[st.id]; };
+    this.inv.slots.forEach(fix);
+    fix(this.offhand);
+    for (const k in this.armor) fix(this.armor[k]);
     this.hotbarIdx = d.hotbarIdx || 0;
     this.creative = !!d.creative;
     this.spawnPoint = d.spawnPoint || null;
@@ -504,7 +560,9 @@ export function matOf(id) {
   if (!b) return 'dirt';
   switch (id) {
     case B.GRASS: case B.TALL_GRASS: case B.FERN: case B.LEAF_ASPEN:
-    case B.LEAF_EMBER: case B.LEAF_PINE: case B.LEAF_PALM: return 'grass';
+    case B.LEAF_EMBER: case B.LEAF_PINE: case B.LEAF_PALM:
+    case B.SHORT_GRASS: case B.REEDS: case B.DEAD_BUSH: case B.THATCH: return 'grass';
+    case B.MUD: return 'dirt';
     case B.SAND: case B.RED_SAND: case B.GRAVEL: return 'sand';
     case B.SNOW: case B.ICE: case B.PACKED_ICE: return 'snow';
     case B.GLASS: return 'glass';

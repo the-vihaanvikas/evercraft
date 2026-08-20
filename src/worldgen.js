@@ -1,7 +1,9 @@
 // EVERCRAFT - procedural world generation (worker-safe, no DOM).
 
 import { Noise, mulberry32, clamp, lerp, smoothstep } from './noise.js';
-import { B, CHUNK_X, CHUNK_Z, WORLD_H, SEA_LEVEL } from './blocks.js';
+import {
+  B, CHUNK_X, CHUNK_Z, WORLD_H, SEA_LEVEL, DOOR_SETS, BED_FOOT_DIR, BED_HEAD_DIR,
+} from './blocks.js';
 
 export const BIOME = {
   OCEAN: 0, BEACH: 1, PLAINS: 2, FOREST: 3, EMBERWOOD: 4,
@@ -205,7 +207,11 @@ export class WorldGen {
           case BIOME.RUST_FLATS: topBlock = B.RED_SAND; subBlock = B.SANDSTONE; subDepth = 5; break;
           case BIOME.FROST_PEAKS: topBlock = B.SNOW; subBlock = B.STONE; subDepth = 2; break;
           case BIOME.PINE_HILLS: topBlock = B.GRASS; subBlock = B.DIRT; break;
-          case BIOME.MARSH: topBlock = rnd() < 0.25 ? B.CLAY : B.GRASS; subBlock = B.DIRT; subDepth = 4; break;
+          case BIOME.MARSH: {
+            const mr = rnd();
+            topBlock = mr < 0.22 ? B.CLAY : mr < 0.48 ? B.MUD : B.GRASS;
+            subBlock = B.DIRT; subDepth = 4; break;
+          }
           default: break;
         }
         if (col.mtn > 0.5 && col.h > SEA_LEVEL + 22 && bio !== BIOME.FROST_PEAKS) {
@@ -388,16 +394,23 @@ export class WorldGen {
               else if (r < 0.535) setIfAir(lx, h + 1, lz, B.BERRY_BUSH);
               break;
             case BIOME.MARSH:
-              if (r < 0.22) setIfAir(lx, h + 1, lz, B.SHORT_GRASS);
-              else if (r < 0.30) tallGrass(lx, h + 1, lz);
-              else if (r < 0.36) setIfAir(lx, h + 1, lz, B.FERN);
-              else if (r < 0.375) setIfAir(lx, h + 1, lz, B.MUSHROOM);
+              if (r < 0.18) setIfAir(lx, h + 1, lz, B.SHORT_GRASS);
+              else if (r < 0.26) tallGrass(lx, h + 1, lz);
+              else if (r < 0.32) setIfAir(lx, h + 1, lz, B.FERN);
+              // reeds crowd the water's edge
+              else if (r < 0.44 && h <= SEA_LEVEL + 2) setIfAir(lx, h + 1, lz, B.REEDS);
+              else if (r < 0.455) setIfAir(lx, h + 1, lz, B.MUSHROOM);
+              break;
+            case BIOME.BEACH:
+              if (r < 0.05 && h <= SEA_LEVEL + 1) setIfAir(lx, h + 1, lz, B.REEDS);
               break;
             case BIOME.DUNES:
               if (r < 0.012) this.cactus(set, get, lx, h + 1, lz, rnd);
+              else if (r < 0.045) setIfAir(lx, h + 1, lz, B.DEAD_BUSH);
               break;
             case BIOME.RUST_FLATS:
               if (r < 0.010) this.cactus(set, get, lx, h + 1, lz, rnd);
+              else if (r < 0.050) setIfAir(lx, h + 1, lz, B.DEAD_BUSH);
               break;
             default: break;
           }
@@ -453,72 +466,112 @@ export class WorldGen {
     }
 
     // ---- structures -------------------------------------------------
-    // Two independent hashes: one decides IF a chunk gets a structure, a
-    // second decides WHICH, so structure kinds are spread evenly instead of
-    // always co-occurring on the same chunk coordinates.
+    // Painted from a 3x3 neighbourhood so a building whose origin sits in an
+    // adjacent chunk still writes the part of itself that overlaps this one.
+    // Without this, anything wider than the gap to the chunk border was sliced
+    // clean off - the single biggest thing wrong with the old structures.
+    this.paintStructures(cx, cz, set, get);
+  }
+
+  // ------------------------------------------------------------ structures
+  /**
+   * Deterministic description of the structure a chunk hosts, or null.
+   *
+   * Everything here is a pure function of (chunk coords, seed) so that all
+   * nine chunks around a building agree on its position, kind, size and every
+   * random detail. That is what lets `paintStructures` draw the overlapping
+   * slice of a neighbour's building instead of chopping it at the border.
+   */
+  structureAt(cx, cz) {
     const sHash = ((cx * 73856093) ^ (cz * 19349663) ^ this.seed) >>> 0;
+    if (sHash % 11 !== 0) return null;
+    // dedicated RNG stream: independent of whatever the chunk decorator drew
+    const rnd = mulberry32((sHash ^ 0x5bf03635) >>> 0);
+    // Anywhere in the chunk: `paintStructures` paints whatever spills over the
+    // border from a neighbour, so a building no longer has to be shoved into
+    // the middle of its own chunk to avoid being sliced in half.
+    const lx = 1 + ((rnd() * 14) | 0), lz = 1 + ((rnd() * 14) | 0);
+    const wx = cx * CHUNK_X + lx, wz = cz * CHUNK_Z + lz;
+    const col = this.column(wx, wz);
+    if (col.biome === BIOME.OCEAN) return null;
+    if (col.h < SEA_LEVEL + 1) return null;
     const kHash = ((cx * 40503671) ^ (cz * 29986577) ^ (this.seed * 6971)) >>> 0;
-    if (sHash % 11 === 0) {
-      this.placeStructure(kHash, set, get, heights, biomes, rnd);
+    const kind = this._structureKind(kHash % 100, col.biome);
+    return { lx, lz, wx, wz, h: col.h, bio: col.biome, kind, rnd };
+  }
+
+  /** Biome-weighted choice of which building goes up. */
+  _structureKind(roll, bio) {
+    const frost = bio === BIOME.FROST_PEAKS;
+    const desert = bio === BIOME.DUNES || bio === BIOME.RUST_FLATS;
+    const wooded = bio === BIOME.FOREST || bio === BIOME.PINE_HILLS ||
+      bio === BIOME.EMBERWOOD;
+    if (desert) {
+      if (roll < 40) return 'obelisk';
+      if (roll < 70) return 'wellRuin';
+      return 'ruin';
     }
+    if (frost) {
+      if (roll < 55) return 'cairn';
+      return 'watchtower';
+    }
+    if (wooded) {
+      if (roll < 30) return 'campsite';
+      if (roll < 55) return 'hunterHut';
+      if (roll < 75) return 'watchtower';
+      return 'ruin';
+    }
+    if (roll < 22) return 'campsite';
+    if (roll < 42) return 'wellRuin';
+    if (roll < 60) return 'watchtower';
+    if (roll < 78) return 'hunterHut';
+    return 'ruin';
   }
 
   /**
-   * Choose and build a structure appropriate to the local biome.
-   * Every builder is defensive: it bails out on water, steep ground or the
-   * wrong biome rather than carving a floating box into the landscape.
+   * Draw every structure that reaches into this chunk.
+   * `set`/`get` clip to the chunk, so painting a neighbour's building simply
+   * writes the cells that land inside us.
    */
-  placeStructure(kHash, set, get, heights, biomes, rnd) {
-    const lx = 4 + ((rnd() * 6) | 0), lz = 4 + ((rnd() * 6) | 0);
-    const i2 = lx + lz * CHUNK_X;
-    const bio = biomes[i2];
-    const h = heights[i2];
-    if (bio === BIOME.OCEAN) return;
-    if (h < SEA_LEVEL + 1) return;
+  paintStructures(cx, cz, set, get) {
+    for (let dz = -1; dz <= 1; dz++) {
+      for (let dx = -1; dx <= 1; dx++) {
+        const st = this.structureAt(cx + dx, cz + dz);
+        if (!st) continue;
+        const ox = dx * CHUNK_X, oz = dz * CHUNK_Z;
+        const sset = (x, y, z, id) => set(x + ox, y, z + oz, id);
+        const sget = (x, y, z) => get(x + ox, y, z + oz);
+        this.buildStructure(st, sset, sget);
+      }
+    }
+  }
 
-    // reject uneven ground so buildings don't hang off cliffs
+  /** Dispatch to the right builder with a flatness helper bound to the site. */
+  buildStructure(st, set, get) {
+    const { lx, lz, h, bio, rnd, kind } = st;
+    // Ground roughness around the site, measured from the height field rather
+    // than the chunk's own array so every neighbour agrees.
     const flat = (r) => {
       let lo = 999, hi = -999;
       for (let dz = -r; dz <= r; dz++) {
         for (let dx = -r; dx <= r; dx++) {
-          const xx = lx + dx, zz = lz + dz;
-          if (xx < 0 || zz < 0 || xx >= CHUNK_X || zz >= CHUNK_Z) continue;
-          const hh = heights[xx + zz * CHUNK_X];
+          const hh = this.column(st.wx + dx, st.wz + dz).h;
           if (hh < lo) lo = hh;
           if (hh > hi) hi = hh;
         }
       }
       return hi - lo;
     };
-
-    const frost = bio === BIOME.FROST_PEAKS;
-    const desert = bio === BIOME.DUNES || bio === BIOME.RUST_FLATS;
-    const wooded = bio === BIOME.FOREST || bio === BIOME.PINE_HILLS ||
-      bio === BIOME.EMBERWOOD;
-
-    // weighted pick, biased by biome
-    const roll = kHash % 100;
-    if (desert) {
-      if (roll < 40) return this.obelisk(set, get, lx, lz, h, rnd);
-      if (roll < 70) return this.wellRuin(set, get, lx, lz, h, rnd, flat);
-      return this.ruin(set, get, lx, lz, h, bio, rnd, flat);
+    switch (kind) {
+      case 'ruin': return this.ruin(set, get, lx, lz, h, bio, rnd, flat);
+      case 'hunterHut': return this.hunterHut(set, get, lx, lz, h, bio, rnd, flat);
+      case 'watchtower': return this.watchtower(set, get, lx, lz, h, bio, rnd, flat);
+      case 'campsite': return this.campsite(set, get, lx, lz, h, rnd, flat);
+      case 'wellRuin': return this.wellRuin(set, get, lx, lz, h, rnd, flat);
+      case 'obelisk': return this.obelisk(set, get, lx, lz, h, rnd);
+      case 'cairn': return this.cairn(set, get, lx, lz, h, rnd);
+      default: return undefined;
     }
-    if (frost) {
-      if (roll < 55) return this.cairn(set, get, lx, lz, h, rnd);
-      return this.watchtower(set, get, lx, lz, h, bio, rnd, flat);
-    }
-    if (wooded) {
-      if (roll < 30) return this.campsite(set, get, lx, lz, h, rnd, flat);
-      if (roll < 55) return this.hunterHut(set, get, lx, lz, h, bio, rnd, flat);
-      if (roll < 75) return this.watchtower(set, get, lx, lz, h, bio, rnd, flat);
-      return this.ruin(set, get, lx, lz, h, bio, rnd, flat);
-    }
-    // open land
-    if (roll < 22) return this.campsite(set, get, lx, lz, h, rnd, flat);
-    if (roll < 42) return this.wellRuin(set, get, lx, lz, h, rnd, flat);
-    if (roll < 60) return this.watchtower(set, get, lx, lz, h, bio, rnd, flat);
-    if (roll < 78) return this.hunterHut(set, get, lx, lz, h, bio, rnd, flat);
-    return this.ruin(set, get, lx, lz, h, bio, rnd, flat);
   }
 
   tree(set, get, x, y, z, kind, rnd) {
@@ -608,7 +661,7 @@ export class WorldGen {
     }
   }
 
-  /** small ruined outpost, contains a crate (marked via metadata block) */
+  // -------------------------------------------------------- build palettes
   /** Wood palette that suits the local biome. */
   _plank(bio) {
     if (bio === BIOME.EMBERWOOD) return B.PLANK_EMBER;
@@ -622,6 +675,28 @@ export class WorldGen {
     if (bio === BIOME.DUNES || bio === BIOME.RUST_FLATS) return B.LOG_PALM;
     return B.LOG_ASPEN;
   }
+  /** Door for the local wood, as a [lower, upper] id pair facing `dir`. */
+  _door(bio, dir) {
+    const wood = bio === BIOME.EMBERWOOD ? 'ember'
+      : (bio === BIOME.PINE_HILLS || bio === BIOME.FROST_PEAKS) ? 'pine'
+        : (bio === BIOME.DUNES || bio === BIOME.RUST_FLATS) ? 'palm' : 'aspen';
+    const set = DOOR_SETS[wood];
+    return [set.closedLow[dir & 3], set.closedTop[dir & 3]];
+  }
+  /** Masonry palette: [main course, weathered accent, trim]. */
+  _masonry(bio, rnd) {
+    if (bio === BIOME.DUNES || bio === BIOME.RUST_FLATS)
+      return [B.SANDSTONE, B.CHISELED_SANDSTONE, B.SANDSTONE];
+    if (bio === BIOME.FROST_PEAKS) return [B.STONE_BRICKS, B.FROST_BRICK, B.SMOOTH_STONE];
+    return [B.STONE_BRICKS, rnd() < 0.5 ? B.MOSSY_BRICKS : B.CRACKED_BRICKS, B.SMOOTH_STONE];
+  }
+  /** Roofing that matches the climate. */
+  _roof(bio) {
+    if (bio === BIOME.DUNES || bio === BIOME.RUST_FLATS) return B.THATCH;
+    if (bio === BIOME.FROST_PEAKS || bio === BIOME.PINE_HILLS) return B.ROOF_TILE;
+    return B.ROOF_TILE;
+  }
+
   /** Clear headroom above a footprint so trees don't grow through a build. */
   _clear(set, x0, z0, w, d, y, hgt) {
     for (let dz = 0; dz < d; dz++)
@@ -630,239 +705,465 @@ export class WorldGen {
   }
 
   /**
-   * Ruined outpost — now with three floor plans, optional second storey,
-   * rubble, and biome-appropriate masonry.
+   * Level a site and give it a plinth.
+   * Buildings used to sit on whatever the terrain happened to be doing, so a
+   * one-block dip left a hole under the wall. This lays a foundation course
+   * and backfills every column down to the real ground, which is what makes a
+   * building read as *built* rather than pasted on.
+   */
+  _foundation(set, x0, z0, w, d, y, mat, fill, depth = 4) {
+    for (let dz = 0; dz < d; dz++) {
+      for (let dx = 0; dx < w; dx++) {
+        set(x0 + dx, y, z0 + dz, mat);
+        for (let k = 1; k <= depth; k++) set(x0 + dx, y - k, z0 + dz, fill);
+      }
+    }
+  }
+
+  /** Rectangular wall course with optional gaps, one block high. */
+  _wallRing(set, x0, z0, w, d, y, mat, accent, rnd, decay = 0) {
+    for (let dz = 0; dz < d; dz++) {
+      for (let dx = 0; dx < w; dx++) {
+        const edge = dx === 0 || dz === 0 || dx === w - 1 || dz === d - 1;
+        if (!edge) continue;
+        if (decay && rnd() < decay) continue;
+        set(x0 + dx, y, z0 + dz, rnd() < 0.22 ? accent : mat);
+      }
+    }
+  }
+
+  /**
+   * Ruined outpost.
+   * Three floor plans, a proper plinth, corner pilasters, arched window
+   * openings, a rubble-strewn interior with shelving and a hearth, and an
+   * optional upper floor reached by a ladder.
    */
   ruin(set, get, lx, lz, h, bio, rnd, flat) {
     if (flat && flat(3) > 4) return;
     const variant = (rnd() * 3) | 0;
-    const w = variant === 2 ? 6 : 4;
-    const d = variant === 1 ? 6 : 4;
-    const wallH = variant === 1 ? 4 : 3;
-    const stone = bio === BIOME.DUNES || bio === BIOME.RUST_FLATS
-      ? B.SANDSTONE : B.STONE_BRICKS;
-    const worn = bio === BIOME.FROST_PEAKS ? B.STONE : B.MOSS_STONE;
+    const w = variant === 2 ? 8 : 6;         // outer footprint incl. walls
+    const d = variant === 1 ? 8 : 6;
+    const wallH = variant === 1 ? 5 : 4;
+    const [stone, worn, trim] = this._masonry(bio, rnd);
+    const x0 = lx - 1, z0 = lz - 1;
 
-    this._clear(set, lx - 1, lz - 1, w + 2, d + 2, h + 1, wallH + 2);
-    for (let dz = -1; dz <= d; dz++) {
-      for (let dx = -1; dx <= w; dx++) {
-        set(lx + dx, h, lz + dz, stone);
-        for (let dy = 1; dy <= wallH; dy++) {
-          const edge = dx === -1 || dz === -1 || dx === w || dz === d;
-          if (!edge) continue;
-          // higher courses crumble more, giving a natural broken silhouette
-          const decay = 0.12 + dy * 0.09;
-          if (rnd() < decay) continue;
-          set(lx + dx, h + dy, lz + dz, rnd() < 0.3 ? worn : stone);
+    this._clear(set, x0 - 1, z0 - 1, w + 2, d + 2, h + 1, wallH + 3);
+    this._foundation(set, x0, z0, w, d, h, trim, stone, 4);
+    // interior floor: tiled, with the odd cracked slab
+    for (let dz = 1; dz < d - 1; dz++)
+      for (let dx = 1; dx < w - 1; dx++)
+        set(x0 + dx, h, z0 + dz, rnd() < 0.25 ? worn : B.TILE_DARK);
+    // a step up to the doorway so the plinth reads from outside
+    for (let dx = 2; dx < w - 2; dx++) set(x0 + dx, h - 1, z0 - 1, trim);
+
+    // walls: crumble more the higher they go, and leave window openings
+    for (let dy = 1; dy <= wallH; dy++) {
+      const decay = Math.max(0, (dy - 2) * 0.18);
+      this._wallRing(set, x0, z0, w, d, h + dy, stone, worn, rnd, decay);
+      // window band
+      if (dy === 2 || dy === 3) {
+        for (let dx = 2; dx < w - 2; dx += 2) {
+          set(x0 + dx, h + dy, z0, B.AIR);
+          set(x0 + dx, h + dy, z0 + d - 1, B.AIR);
         }
       }
     }
-    // doorway
-    const dxDoor = (rnd() * w) | 0;
-    set(lx + dxDoor, h + 1, lz - 1, B.AIR);
-    set(lx + dxDoor, h + 2, lz - 1, B.AIR);
-    // scattered rubble inside
-    for (let i = 0; i < 4; i++) {
-      const rx = lx + ((rnd() * w) | 0), rz = lz + ((rnd() * d) | 0);
-      if (rnd() < 0.5) set(rx, h + 1, rz, B.RUBBLE);
+    // corner pilasters run the full height and are capped with chiseled stone
+    for (const [px, pz] of [[0, 0], [w - 1, 0], [0, d - 1], [w - 1, d - 1]]) {
+      for (let dy = 1; dy <= wallH; dy++) set(x0 + px, h + dy, z0 + pz, stone);
+      set(x0 + px, h + wallH + 1, z0 + pz, rnd() < 0.6 ? B.CHISELED : trim);
     }
-    // chest against the back wall, with open floor in front of it
-    set(lx + 1, h + 1, lz + d - 1, B.CRATE);
-    set(lx + 1, h + 1, lz + d - 2, B.AIR);
-    if (rnd() < 0.55) set(lx + w - 2, h + 1, lz + 1, B.BENCH);
-    if (rnd() < 0.35) set(lx + w - 1, h + 1, lz, B.TORCH);
-    if (rnd() < 0.25) set(lx + 2, h + 1, lz + 1, B.SMELTER);
-    // occasional partial upper floor
-    if (variant === 1 && rnd() < 0.5) {
-      for (let dz = 0; dz < d; dz++)
-        for (let dx = 0; dx < w; dx++)
-          if (rnd() < 0.6) set(lx + dx, h + wallH, lz + dz, B.PLANK_PINE);
+    // arched doorway in the south wall
+    const dxDoor = 2 + ((rnd() * (w - 4)) | 0);
+    set(x0 + dxDoor, h + 1, z0, B.AIR);
+    set(x0 + dxDoor, h + 2, z0, B.AIR);
+    set(x0 + dxDoor - 1, h + 3, z0, trim);
+    set(x0 + dxDoor, h + 3, z0, B.CHISELED);
+    set(x0 + dxDoor + 1, h + 3, z0, trim);
+
+    // interior fittings
+    set(x0 + 1, h + 1, z0 + d - 2, B.CRATE);
+    set(x0 + 1, h + 1, z0 + d - 3, B.AIR);
+    if (rnd() < 0.6) set(x0 + w - 2, h + 1, z0 + 1, B.BENCH);
+    if (rnd() < 0.5) set(x0 + w - 2, h + 1, z0 + d - 2, B.BOOKSHELF);
+    if (rnd() < 0.45) set(x0 + 2, h + 1, z0 + 1, B.HEARTH);
+    else if (rnd() < 0.4) set(x0 + 2, h + 1, z0 + 1, B.SMELTER);
+    // wall torches actually mounted on the walls
+    set(x0 + 1, h + 3, z0 + 1, B.TORCH_N);
+    if (rnd() < 0.6) set(x0 + w - 2, h + 3, z0 + d - 2, B.TORCH_S);
+    // scattered rubble + moss creep
+    for (let i = 0; i < 6; i++) {
+      const rx = x0 + 1 + ((rnd() * (w - 2)) | 0), rz = z0 + 1 + ((rnd() * (d - 2)) | 0);
+      if (rnd() < 0.5) set(rx, h + 1, rz, rnd() < 0.5 ? B.RUBBLE : worn);
+    }
+    // partial upper floor with a ladder up to it
+    if (variant === 1 && rnd() < 0.6) {
+      const plank = this._plank(bio);
+      for (let dz = 1; dz < d - 1; dz++)
+        for (let dx = 1; dx < w - 1; dx++)
+          if (rnd() < 0.62) set(x0 + dx, h + wallH, z0 + dz, plank);
+      set(x0 + 1, h + wallH, z0 + 1, B.AIR);
+      for (let dy = 1; dy < wallH; dy++) set(x0 + 1, h + dy, z0 + 1, B.LADDER_N);
     }
   }
 
-  /** Small hunter's hut: planks, a pitched roof, a bed of wool and a chest. */
+  /**
+   * Hunter's hut.
+   * Stone plinth, timber-framed plaster walls between corner posts, glazed
+   * windows with sills, a porch, a ridged and overhanging roof, a chimney and
+   * a furnished interior.
+   */
   hunterHut(set, get, lx, lz, h, bio, rnd, flat) {
     if (flat && flat(3) > 3) return;
     const plank = this._plank(bio), log = this._log(bio);
-    const w = 5, d = 5;
-    this._clear(set, lx - 1, lz - 1, w + 2, d + 2, h + 1, 7);
-    for (let dz = -1; dz <= d; dz++)
-      for (let dx = -1; dx <= w; dx++) set(lx + dx, h, lz + dz, plank);
-    // corner posts + walls
-    for (let dy = 1; dy <= 3; dy++) {
-      for (let dz = -1; dz <= d; dz++) {
-        for (let dx = -1; dx <= w; dx++) {
-          const edge = dx === -1 || dz === -1 || dx === w || dz === d;
+    const [stone, worn, trim] = this._masonry(bio, rnd);
+    const roof = this._roof(bio);
+    const w = 7, d = 7;                    // outer footprint
+    const x0 = lx - 1, z0 = lz - 1;
+    const wallH = 3;
+
+    this._clear(set, x0 - 2, z0 - 2, w + 4, d + 4, h + 1, wallH + 6);
+    // plinth one block proud of the walls, then a plank floor inside
+    this._foundation(set, x0 - 1, z0 - 1, w + 2, d + 2, h, trim, stone, 4);
+    for (let dz = 0; dz < d; dz++)
+      for (let dx = 0; dx < w; dx++) set(x0 + dx, h, z0 + dz, plank);
+
+    // walls: corner posts of log, panels of timber frame / plaster
+    for (let dy = 1; dy <= wallH; dy++) {
+      for (let dz = 0; dz < d; dz++) {
+        for (let dx = 0; dx < w; dx++) {
+          const edge = dx === 0 || dz === 0 || dx === w - 1 || dz === d - 1;
           if (!edge) continue;
-          const corner = (dx === -1 || dx === w) && (dz === -1 || dz === d);
-          set(lx + dx, h + dy, lz + dz, corner ? log : plank);
+          const corner = (dx === 0 || dx === w - 1) && (dz === 0 || dz === d - 1);
+          if (corner) { set(x0 + dx, h + dy, z0 + dz, log); continue; }
+          set(x0 + dx, h + dy, z0 + dz, dy === wallH ? B.TIMBER_FRAME
+            : (rnd() < 0.25 ? B.TIMBER_FRAME : B.PLASTER));
         }
       }
     }
-    // window + door
-    set(lx + 2, h + 2, lz - 1, B.GLASS);
-    set(lx + w, h + 2, lz + 2, B.GLASS);
-    set(lx + 2, h + 1, lz - 1, B.DOOR_LOW);
-    set(lx + 2, h + 2, lz - 1, B.DOOR_TOP);
-    // pitched roof
-    for (let r = 0; r <= 2; r++) {
-      const y = h + 4 + r;
-      for (let dz = -1 + r; dz <= d - r; dz++)
-        for (let dx = -1 + r; dx <= w - r; dx++)
-          set(lx + dx, y, lz + dz, plank);
+    // glazed windows with sills, centred on three walls
+    const mid = (w / 2) | 0;
+    for (const [wx, wz] of [[mid, 0], [0, mid], [w - 1, mid], [mid, d - 1]]) {
+      set(x0 + wx, h + 2, z0 + wz, B.GLASS);
+      set(x0 + wx, h + 1, z0 + wz, B.TIMBER_FRAME);
     }
-    // interior: a functional east-facing bed replaces the decorative wool pair
-    set(lx, h + 1, lz + d - 1, B.BED_FOOT_E);
-    set(lx + 1, h + 1, lz + d - 1, B.BED_HEAD_E);
-    set(lx + w - 1, h + 1, lz + 1, B.CRATE);
-    set(lx + w - 2, h + 1, lz + 1, B.AIR);
-    if (rnd() < 0.7) set(lx + w - 1, h + 1, lz + d - 1, B.BENCH);
-    if (rnd() < 0.5) set(lx, h + 1, lz, B.SMELTER);
-    set(lx + 2, h + 3, lz + 2, B.LANTERN);
+    // door in the south wall (offset from the window) + porch
+    const doorX = mid - 2 < 1 ? 1 : mid - 2;
+    const [dLow, dTop] = this._door(bio, 0);
+    set(x0 + doorX, h + 1, z0, dLow);
+    set(x0 + doorX, h + 2, z0, dTop);
+    set(x0 + doorX, h + 3, z0, B.TIMBER_FRAME);
+    for (let dx = doorX - 1; dx <= doorX + 1; dx++) set(x0 + dx, h, z0 - 1, plank);
+    set(x0 + doorX - 1, h + 1, z0 - 1, log);
+    set(x0 + doorX + 1, h + 1, z0 - 1, log);
+    set(x0 + doorX - 1, h + 2, z0 - 1, log);
+    set(x0 + doorX + 1, h + 2, z0 - 1, log);
+    for (let dx = doorX - 1; dx <= doorX + 1; dx++) set(x0 + dx, h + 3, z0 - 1, roof);
+
+    // Ridged roof running along X, with a one-block overhang on all sides.
+    // The loop runs one course past the halfway point so the final ridge row
+    // is laid; stopping earlier left a one-block slot open to the sky.
+    const ridgeY = h + wallH + 1;
+    for (let r = 0; r <= 4; r++) {
+      const y = ridgeY + r;
+      const inset = r - 1;                 // r=0 is the overhanging eaves course
+      const zA = z0 + inset, zB = z0 + d - 1 - inset;
+      if (zA > zB) break;
+      for (let dx = -1; dx < w + 1; dx++) {
+        set(x0 + dx, y, zA, roof);
+        set(x0 + dx, y, zB, roof);
+        if (zA === zB) continue;
+        // close the gable ends so the loft is not open to the sky
+        if (dx === -1 || dx === w) {
+          for (let z = zA + 1; z < zB; z++) set(x0 + dx, y, z, plank);
+        }
+      }
+    }
+    // chimney rising out of the roof over the hearth
+    for (let dy = 1; dy <= wallH + 4; dy++) set(x0 + w - 2, h + dy, z0 + 1, stone);
+    set(x0 + w - 2, h + wallH + 5, z0 + 1, worn);
+    set(x0 + w - 2, h + 1, z0 + 1, B.HEARTH);
+
+    // interior: bed, chest, bench, shelving and a hanging lantern
+    const bedDir = 1;                       // head toward +X
+    set(x0 + 1, h + 1, z0 + d - 2, BED_FOOT_DIR[bedDir]);
+    set(x0 + 2, h + 1, z0 + d - 2, BED_HEAD_DIR[bedDir]);
+    set(x0 + w - 2, h + 1, z0 + d - 2, B.CRATE);
+    set(x0 + w - 3, h + 1, z0 + d - 2, B.AIR);
+    if (rnd() < 0.8) set(x0 + 1, h + 1, z0 + 1, B.BENCH);
+    if (rnd() < 0.6) set(x0 + w - 2, h + 1, z0 + 3, B.BOOKSHELF);
+    set(x0 + mid, h + 3, z0 + mid, B.LANTERN);
+    // a small woodpile and a drying rack outside
+    for (let i = 0; i < 3; i++) set(x0 + w, h + 1, z0 + 2 + i, log);
+    set(x0 - 1, h + 1, z0 + d - 2, B.CRATE);
   }
 
-  /** Watchtower: climbable hatch, usable roof deck, light and guaranteed loot. */
+  /**
+   * Watchtower.
+   * A battered plinth and buttressed base taper into a 3x3 shaft with arrow
+   * slits, a hoarding of timber under the parapet, a proper crenellated deck
+   * and a lit chest at the top.
+   */
   watchtower(set, get, lx, lz, h, bio, rnd, flat) {
     if (flat && flat(2) > 3) return;
-    const stone = bio === BIOME.DUNES || bio === BIOME.RUST_FLATS
-      ? B.SANDSTONE : B.STONE_BRICKS;
-    const hgt = 7 + ((rnd() * 5) | 0);
-    this._clear(set, lx - 1, lz - 1, 5, 5, h + 1, hgt + 4);
+    const [stone, worn, trim] = this._masonry(bio, rnd);
+    const plank = this._plank(bio);
+    const hgt = 9 + ((rnd() * 5) | 0);
+    this._clear(set, lx - 2, lz - 2, 7, 7, h + 1, hgt + 5);
 
-    // 3x3 hollow shaft. Stop one course below the deck so the hatch exit has
-    // headroom instead of trapping the player against a roof block.
-    for (let dy = 0; dy < hgt; dy++) {
+    // stepped plinth: 5x5, then 4x4, then the shaft
+    this._foundation(set, lx - 1, lz - 1, 5, 5, h, trim, stone, 4);
+    for (let dz = -1; dz <= 3; dz++) for (let dx = -1; dx <= 3; dx++) {
+      const ring = dx === -1 || dz === -1 || dx === 3 || dz === 3;
+      if (ring) set(lx + dx, h + 1, lz + dz, rnd() < 0.2 ? worn : stone);
+    }
+    // corner buttresses climbing the first third of the shaft
+    for (const [bx, bz] of [[-1, -1], [3, -1], [-1, 3], [3, 3]]) {
+      const bh = 2 + ((rnd() * 3) | 0);
+      for (let dy = 2; dy <= bh; dy++) set(lx + bx, h + dy, lz + bz, stone);
+    }
+
+    // 3x3 hollow shaft with arrow slits every third course
+    for (let dy = 1; dy < hgt; dy++) {
       for (let dz = 0; dz < 3; dz++) {
         for (let dx = 0; dx < 3; dx++) {
           const edge = dx === 0 || dz === 0 || dx === 2 || dz === 2;
           if (!edge) { set(lx + dx, h + dy, lz + dz, B.AIR); continue; }
-          if (dy > 2 && rnd() < 0.045) continue;
-          set(lx + dx, h + dy, lz + dz, rnd() < 0.22 ? B.MOSS_STONE : stone);
+          const corner = (dx === 0 || dx === 2) && (dz === 0 || dz === 2);
+          const slit = !corner && dy > 3 && dy % 3 === 0;
+          if (slit) { set(lx + dx, h + dy, lz + dz, B.AIR); continue; }
+          if (dy > 4 && rnd() < 0.04) continue;      // weathered gap
+          set(lx + dx, h + dy, lz + dz, rnd() < 0.22 ? worn : stone);
         }
       }
     }
 
-    // Guaranteed south doorway and a solid interior floor make the shaft
-    // reachable from ground level rather than sealing the useful ladder inside.
-    set(lx + 1, h, lz + 1, stone);
+    // ground-floor doorway to the south + solid inner floor
+    set(lx + 1, h, lz + 1, trim);
     set(lx + 1, h + 1, lz + 2, B.AIR);
     set(lx + 1, h + 2, lz + 2, B.AIR);
-
-    // A wall-mounted ladder reaches through the central hatch. The north shaft
-    // wall at z=0 supports every rung, including the final rung at deck height.
+    set(lx + 1, h + 3, lz + 2, B.CHISELED);
+    // ladder all the way up the north wall of the shaft
     for (let dy = 1; dy <= hgt; dy++) set(lx + 1, h + dy, lz + 1, B.LADDER_N);
+    // torch-lit landing halfway up
+    set(lx + 2, h + ((hgt / 2) | 0), lz + 1, B.TORCH_E);
 
-    // Broad roof deck with one central hatch.
-    for (let dz = -1; dz <= 3; dz++) for (let dx = -1; dx <= 3; dx++)
-      set(lx + dx, h + hgt, lz + dz, (dx === 1 && dz === 1) ? B.LADDER_N : stone);
-    // Alternating battlements around the perimeter leave a walkable interior.
+    // timber hoarding just below the deck
     for (let dz = -1; dz <= 3; dz++) for (let dx = -1; dx <= 3; dx++) {
       const ring = dx === -1 || dz === -1 || dx === 3 || dz === 3;
-      if (ring && ((dx + dz) & 1) === 0) set(lx + dx, h + hgt + 1, lz + dz, stone);
+      if (ring) set(lx + dx, h + hgt - 1, lz + dz, plank);
     }
-
-    // Every tower now rewards the climb. The chest has clear space in front,
-    // and a small hanging lantern marks the roof at night.
+    // deck with a central hatch
+    for (let dz = -1; dz <= 3; dz++) for (let dx = -1; dx <= 3; dx++)
+      set(lx + dx, h + hgt, lz + dz, (dx === 1 && dz === 1) ? B.LADDER_N : trim);
+    // crenellations: merlons on alternating cells, two blocks at the corners
+    for (let dz = -1; dz <= 3; dz++) for (let dx = -1; dx <= 3; dx++) {
+      const ring = dx === -1 || dz === -1 || dx === 3 || dz === 3;
+      if (!ring) continue;
+      const corner = (dx === -1 || dx === 3) && (dz === -1 || dz === 3);
+      if (corner) {
+        set(lx + dx, h + hgt + 1, lz + dz, stone);
+        set(lx + dx, h + hgt + 2, lz + dz, worn);
+      } else if (((dx + dz) & 1) === 0) {
+        set(lx + dx, h + hgt + 1, lz + dz, stone);
+      }
+    }
+    // banner, brazier and the reward for the climb
+    const wools = [B.WOOL_RED, B.WOOL_TEAL, B.WOOL_VIOLET, B.WOOL_AMBER];
+    const wool = wools[(rnd() * wools.length) | 0];
+    set(lx + 3, h + hgt + 1, lz + 1, wool);
+    set(lx + 3, h + hgt + 2, lz + 1, wool);
     set(lx + 2, h + hgt + 1, lz + 1, B.CRATE);
     set(lx + 2, h + hgt + 1, lz, B.AIR);
     set(lx, h + hgt + 1, lz + 1, B.LANTERN);
-    set(lx, h + hgt + 2, lz + 1, stone);
   }
 
-  /** Abandoned campsite: fire ring, log seats, a tent of wool. */
+  /**
+   * Abandoned campsite.
+   * A stone-ringed hearth, log benches around it, a real A-frame tent on a
+   * plank floor, a drying rack and a supply crate.
+   */
   campsite(set, get, lx, lz, h, rnd, flat) {
-    if (flat && flat(2) > 3) return;
-    this._clear(set, lx - 2, lz - 2, 6, 6, h + 1, 4);
-    // fire ring
+    if (flat && flat(3) > 3) return;
+    const log = B.LOG_ASPEN, plank = B.PLANK_ASPEN;
+    this._clear(set, lx - 3, lz - 3, 8, 8, h + 1, 5);
+
+    // trodden ground around the camp
+    for (let dz = -2; dz <= 2; dz++)
+      for (let dx = -2; dx <= 2; dx++)
+        if (Math.abs(dx) + Math.abs(dz) <= 3) set(lx + dx, h, lz + dz, B.PATH);
+
+    // fire pit: sunken hearth inside a ring of stones
     for (let dz = -1; dz <= 1; dz++)
-      for (let dx = -1; dx <= 1; dx++)
-        if (dx || dz) set(lx + dx, h + 1, lz + dz, B.RUBBLE);
-    set(lx, h + 1, lz, rnd() < 0.6 ? B.TORCH : B.COAL_BLOCK);
-    // log seats
-    const log = B.LOG_ASPEN;
-    set(lx - 2, h + 1, lz, log);
-    set(lx + 2, h + 1, lz, log);
-    // lean-to tent
+      for (let dx = -1; dx <= 1; dx++) {
+        if (!dx && !dz) continue;
+        set(lx + dx, h + 1, lz + dz, rnd() < 0.4 ? B.MOSSY_BRICKS : B.RUBBLE);
+      }
+    set(lx, h + 1, lz, B.HEARTH);
+    // spit over the fire
+    set(lx - 1, h + 2, lz, log);
+    set(lx + 1, h + 2, lz, log);
+
+    // log benches on two sides
+    for (let dx = -1; dx <= 1; dx++) {
+      set(lx + dx, h + 1, lz - 2, log);
+      set(lx + dx, h + 1, lz + 2, log);
+    }
+
+    // A-frame tent to the east, on its own plank floor
+    const tx = lx + 3;
     const wools = [B.WOOL_RED, B.WOOL_TEAL, B.WOOL_AMBER, B.WOOL_SLATE];
     const wool = wools[(rnd() * wools.length) | 0];
-    for (let dx = -1; dx <= 1; dx++) {
-      set(lx + dx, h + 2, lz + 2, wool);
-      set(lx + dx, h + 1, lz + 3, wool);
+    for (let dz = -1; dz <= 1; dz++) for (let dx = 0; dx <= 2; dx++)
+      set(tx + dx, h, lz + dz, plank);
+    for (let dx = 0; dx <= 2; dx++) {
+      set(tx + dx, h + 1, lz - 1, wool);
+      set(tx + dx, h + 1, lz + 1, wool);
+      set(tx + dx, h + 2, lz, wool);
     }
-    if (rnd() < 0.8) set(lx + 1, h + 1, lz + 2, B.CRATE);
-    if (rnd() < 0.4) set(lx - 1, h + 1, lz + 2, B.BENCH);
+    // ridge pole and pegs
+    set(tx - 1, h + 2, lz, log);
+    set(tx + 3, h + 2, lz, log);
+    if (rnd() < 0.7) {
+      set(tx + 1, h + 1, lz, BED_FOOT_DIR[1]);
+      set(tx + 2, h + 1, lz, BED_HEAD_DIR[1]);
+    }
+
+    // drying rack west of the fire
+    set(lx - 3, h + 1, lz - 1, log);
+    set(lx - 3, h + 2, lz - 1, log);
+    set(lx - 3, h + 1, lz + 1, log);
+    set(lx - 3, h + 2, lz + 1, log);
+    set(lx - 3, h + 2, lz, log);
+    if (rnd() < 0.5) set(lx - 3, h + 1, lz, B.CRATE);
+
+    if (rnd() < 0.85) set(lx + 1, h + 1, lz - 3, B.CRATE);
+    if (rnd() < 0.5) set(lx - 1, h + 1, lz - 3, B.BENCH);
+    set(lx + 2, h + 1, lz - 2, B.TORCH);
   }
 
-  /** Stone well with a shaft dropping toward the caves below. */
+  /**
+   * Well.
+   * A proper coped rim, four posts, a tiled canopy with a ridge, a winch beam
+   * with a bucket, and a laddered shaft dropping toward the caves.
+   */
   wellRuin(set, get, lx, lz, h, rnd, flat) {
     if (flat && flat(2) > 3) return;
-    const stone = B.STONE_BRICKS;
-    this._clear(set, lx - 1, lz - 1, 5, 5, h + 1, 5);
+    const stone = B.STONE_BRICKS, worn = B.MOSSY_BRICKS, trim = B.SMOOTH_STONE;
+    this._clear(set, lx - 2, lz - 2, 6, 6, h + 1, 7);
+
+    // paved apron
+    for (let dz = -2; dz <= 2; dz++) for (let dx = -2; dx <= 2; dx++) {
+      if (Math.abs(dx) === 2 && Math.abs(dz) === 2) continue;
+      set(lx + dx, h, lz + dz, rnd() < 0.3 ? worn : trim);
+    }
+    // rim: two courses, coped with smooth stone
     for (let dz = -1; dz <= 1; dz++) {
       for (let dx = -1; dx <= 1; dx++) {
         const edge = Math.abs(dx) === 1 || Math.abs(dz) === 1;
-        if (edge) {
-          set(lx + dx, h + 1, lz + dz, stone);
-          set(lx + dx, h + 2, lz + dz, rnd() < 0.3 ? B.MOSS_STONE : stone);
-        }
+        if (!edge) continue;
+        set(lx + dx, h + 1, lz + dz, rnd() < 0.3 ? worn : stone);
+        set(lx + dx, h + 2, lz + dz, trim);
       }
     }
-    // shaft
-    const depth = 6 + ((rnd() * 10) | 0);
+    // shaft with a continuous ladder on its +Z wall, water at the bottom
+    const depth = 7 + ((rnd() * 10) | 0);
     for (let dy = 0; dy < depth; dy++) {
-      // Continuous rungs occupy the shaft itself and cling to its +Z wall.
-      // The previous every-other-block ladder sat inside the wall and could
-      // neither be climbed reliably nor rendered without popping.
       set(lx, h - dy, lz, B.LADDER_S);
       set(lx, h - dy, lz + 1, stone);
     }
-    // roof posts
-    if (rnd() < 0.6) {
-      set(lx - 1, h + 3, lz - 1, B.LOG_ASPEN);
-      set(lx + 1, h + 3, lz + 1, B.LOG_ASPEN);
-      for (let dz = -1; dz <= 1; dz++)
-        for (let dx = -1; dx <= 1; dx++)
-          set(lx + dx, h + 4, lz + dz, B.PLANK_ASPEN);
+    set(lx, h - depth, lz, B.WATER);
+
+    // four posts and a ridged canopy
+    for (const [px, pz] of [[-1, -1], [1, -1], [-1, 1], [1, 1]]) {
+      set(lx + px, h + 3, lz + pz, B.LOG_ASPEN);
+      set(lx + px, h + 4, lz + pz, B.LOG_ASPEN);
     }
-    if (rnd() < 0.5) set(lx + 2, h + 1, lz, B.CRATE);
+    for (let dz = -2; dz <= 2; dz++) for (let dx = -2; dx <= 2; dx++) {
+      if (Math.abs(dx) === 2 && Math.abs(dz) === 2) continue;
+      set(lx + dx, h + 5, lz + dz, B.ROOF_TILE);
+    }
+    for (let dx = -1; dx <= 1; dx++) set(lx + dx, h + 6, lz, B.ROOF_TILE);
+    // winch beam + bucket on a rope
+    set(lx - 1, h + 4, lz, B.LOG_ASPEN);
+    set(lx + 1, h + 4, lz, B.LOG_ASPEN);
+    set(lx, h + 4, lz, B.LOG_ASPEN);
+    set(lx, h + 3, lz, B.LADDER_S);
+    if (rnd() < 0.6) set(lx + 2, h + 1, lz, B.CRATE);
+    if (rnd() < 0.5) set(lx - 2, h + 1, lz + 1, B.MOSSY_BRICKS);
+    set(lx + 1, h + 3, lz + 1, B.LANTERN);
   }
 
-  /** Desert obelisk: a tapering monument with a glowing capstone. */
+  /**
+   * Desert obelisk.
+   * A three-tier stepped base, a tapering shaft banded with carved sandstone,
+   * corner braziers and a glowing capstone.
+   */
   obelisk(set, get, lx, lz, h, rnd) {
-    const hgt = 6 + ((rnd() * 6) | 0);
-    this._clear(set, lx - 2, lz - 2, 6, 6, h + 1, hgt + 3);
-    // stepped base
-    for (let dz = -2; dz <= 2; dz++)
-      for (let dx = -2; dx <= 2; dx++)
-        set(lx + dx, h + 1, lz + dz, B.SANDSTONE);
-    for (let dz = -1; dz <= 1; dz++)
-      for (let dx = -1; dx <= 1; dx++)
-        set(lx + dx, h + 2, lz + dz, B.SANDSTONE);
-    // shaft
+    const hgt = 8 + ((rnd() * 6) | 0);
+    this._clear(set, lx - 3, lz - 3, 8, 8, h + 1, hgt + 4);
+    // stepped base: 7x7 -> 5x5 -> 3x3
+    this._foundation(set, lx - 3, lz - 3, 7, 7, h, B.SANDSTONE, B.SANDSTONE, 3);
+    for (let dz = -2; dz <= 2; dz++) for (let dx = -2; dx <= 2; dx++)
+      set(lx + dx, h + 1, lz + dz, rnd() < 0.12 ? B.CHISELED_SANDSTONE : B.SANDSTONE);
+    for (let dz = -1; dz <= 1; dz++) for (let dx = -1; dx <= 1; dx++)
+      set(lx + dx, h + 2, lz + dz, B.SANDSTONE);
+    // corner braziers on the first step
+    for (const [bx, bz] of [[-2, -2], [2, -2], [-2, 2], [2, 2]]) {
+      set(lx + bx, h + 2, lz + bz, B.CHISELED_SANDSTONE);
+      if (rnd() < 0.75) set(lx + bx, h + 3, lz + bz, B.HEARTH);
+    }
+    // shaft: 3x3 with carved bands, tapering to 1x1 near the top
     for (let dy = 3; dy < hgt; dy++) {
       const r = dy > hgt - 3 ? 0 : 1;
+      const band = dy % 4 === 0;
       for (let dz = -r; dz <= r; dz++)
         for (let dx = -r; dx <= r; dx++)
-          set(lx + dx, h + dy, lz + dz, rnd() < 0.15 ? B.BASALT : B.SANDSTONE);
+          set(lx + dx, h + dy, lz + dz,
+            band ? B.CHISELED_SANDSTONE : (rnd() < 0.12 ? B.BASALT : B.SANDSTONE));
     }
     set(lx, h + hgt, lz, B.LUMEN);
-    if (rnd() < 0.5) set(lx + 2, h + 2, lz + 2, B.CRATE);
+    set(lx, h + hgt + 1, lz, B.CHISELED_SANDSTONE);
+    if (rnd() < 0.6) set(lx + 2, h + 2, lz + 2, B.CRATE);
+    // a couple of dead bushes at the foot of the monument
+    for (let i = 0; i < 3; i++) {
+      const bx = lx - 3 + ((rnd() * 7) | 0), bz = lz - 3 + ((rnd() * 7) | 0);
+      if (get(bx, h + 1, bz) === B.AIR && rnd() < 0.6) set(bx, h + 1, bz, B.DEAD_BUSH);
+    }
   }
 
-  /** Frost cairn: a stacked stone marker, often with a buried cache. */
+  /**
+   * Frost cairn.
+   * A ringed plinth, a tapering stack of frost brick and stone, a lantern-lit
+   * marker post and a buried cache.
+   */
   cairn(set, get, lx, lz, h, rnd) {
-    const hgt = 3 + ((rnd() * 3) | 0);
-    this._clear(set, lx - 1, lz - 1, 4, 4, h + 1, hgt + 2);
+    const hgt = 5 + ((rnd() * 3) | 0);
+    this._clear(set, lx - 2, lz - 2, 6, 6, h + 1, hgt + 3);
+    // ring of set stones around the base
+    for (let dz = -2; dz <= 2; dz++) for (let dx = -2; dx <= 2; dx++) {
+      const ring = Math.max(Math.abs(dx), Math.abs(dz)) === 2;
+      if (ring && rnd() < 0.55) set(lx + dx, h + 1, lz + dz, rnd() < 0.4 ? B.FROST_BRICK : B.STONE);
+      if (Math.max(Math.abs(dx), Math.abs(dz)) <= 1) set(lx + dx, h, lz + dz, B.SMOOTH_STONE);
+    }
+    // stack: 3x3 base tapering to a single capstone
     for (let dy = 1; dy <= hgt; dy++) {
-      const r = dy < hgt - 1 ? 1 : 0;
+      const r = dy <= 2 ? 1 : (dy <= hgt - 2 ? 1 : 0);
       for (let dz = -r; dz <= r; dz++)
         for (let dx = -r; dx <= r; dx++) {
-          if (r === 1 && Math.abs(dx) === 1 && Math.abs(dz) === 1 && rnd() < 0.5) continue;
-          set(lx + dx, h + dy, lz + dz, rnd() < 0.35 ? B.MOSS_STONE : B.STONE);
+          if (r === 1 && Math.abs(dx) === 1 && Math.abs(dz) === 1 && dy > 2 && rnd() < 0.45) continue;
+          set(lx + dx, h + dy, lz + dz,
+            rnd() < 0.3 ? B.MOSS_STONE : (rnd() < 0.35 ? B.FROST_BRICK : B.STONE));
         }
     }
-    set(lx, h + hgt + 1, lz, B.TORCH);
-    if (rnd() < 0.55) set(lx + 2, h + 1, lz, B.CRATE);
+    set(lx, h + hgt + 1, lz, B.LANTERN);
+    // marker post with a banner
+    set(lx + 2, h + 1, lz, B.LOG_PINE);
+    set(lx + 2, h + 2, lz, B.LOG_PINE);
+    set(lx + 2, h + 3, lz, B.WOOL_TEAL);
+    set(lx + 2, h + 4, lz, B.WOOL_WHITE);
+    set(lx - 2, h + 1, lz + 1, B.TORCH);
+    if (rnd() < 0.65) set(lx - 2, h + 1, lz - 1, B.CRATE);
   }
 }
 
