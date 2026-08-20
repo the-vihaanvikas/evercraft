@@ -581,11 +581,12 @@ export class Game {
     if (this.player.dead && !this.death && !this._deathShown) {
       this._beginDeath(this.player.deathCause || 'The world claimed you.');
     }
-    // level-up flourish
-    if (p.level > this._lastLevel) {
-      this._lastLevel = p.level;
-      this.particles.burst(p.pos.x, p.pos.y + 1.2, p.pos.z, 0xffd76a, 24, 2.8, 0.07, 1.1);
-      this.particles.burst(p.pos.x, p.pos.y + 1.7, p.pos.z, 0x8ff08a, 12, 1.5, 0.05, 0.8);
+    // level-up flourish (this.player — `p` is not defined in the loop body)
+    const pl = this.player;
+    if (pl.level > this._lastLevel) {
+      this._lastLevel = pl.level;
+      this.particles.burst(pl.pos.x, pl.pos.y + 1.2, pl.pos.z, 0xffd76a, 24, 2.8, 0.07, 1.1);
+      this.particles.burst(pl.pos.x, pl.pos.y + 1.7, pl.pos.z, 0x8ff08a, 12, 1.5, 0.05, 0.8);
     }
 
     this.materials.shared.uTime.value = this.time;
