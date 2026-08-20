@@ -197,6 +197,13 @@ export class Audio {
   hitEntity() { this.noiseBurst(0.09, 500, 1.2, 0.24); this.tone(180, 0.1, 'square', 0.12, -70); }
   splash() { this.noiseBurst(0.35, 1200, 0.5, 0.24, 'lowpass'); this.noiseBurst(0.2, 2600, 0.6, 0.10, 'highpass', 0.03); }
   fizz() { this.noiseBurst(0.6, 1800, 0.4, 0.16, 'highpass'); }
+  /** Distant thunder: a deep crack, then a rolling low rumble. */
+  thunder() {
+    this.noiseBurst(0.25, 260, 1.8, 0.30, 'lowpass');
+    this.tone(70, 1.8, 'sine', 0.22, -18);
+    this.noiseBurst(1.6, 110, 0.6, 0.20, 'lowpass', 0.28);
+    this.tone(52, 2.4, 'sine', 0.16, -10, 0.35);
+  }
   eat() { for (let i = 0; i < 3; i++) this.noiseBurst(0.08, 300, 1.6, 0.13, 'lowpass', i * 0.13); }
   error() { this.tone(180, 0.14, 'square', 0.12, -40); }
   click() { this.tone(660, 0.035, 'square', 0.06); }
@@ -208,8 +215,11 @@ export class Audio {
       case 'woolback': this.tone(300, 0.3, 'sawtooth', 0.09, -60); break;
       case 'tusker': this.tone(150, 0.35, 'sawtooth', 0.12, -40); break;
       case 'plume': this.tone(1100, 0.07, 'sine', 0.07, 320); this.tone(1400, 0.06, 'sine', 0.05, 200, 0.07); break;
+      case 'fennix': this.tone(520 + Math.random() * 80, 0.09, 'triangle', 0.08, 160); this.tone(760, 0.07, 'square', 0.04, -120, 0.08); break;
+      case 'wisp': this.tone(1240 + Math.random() * 120, 0.16, 'sine', 0.05, 60); this.tone(1860, 0.12, 'sine', 0.03, -40, 0.1); break;
       case 'husk': this.tone(110, 0.5, 'sawtooth', 0.11, -30); this.noiseBurst(0.4, 200, 0.9, 0.08); break;
       case 'creeplet': this.noiseBurst(0.5, 1600, 0.5, 0.10, 'highpass'); break;
+      case 'emberling': this.noiseBurst(0.35, 900 + Math.random() * 500, 0.7, 0.10, 'highpass'); this.tone(300, 0.12, 'square', 0.04, 120); break;
       case 'shardling': this.tone(880, 0.2, 'square', 0.07, -300); break;
       case 'gloom': this.noiseBurst(0.7, 300, 0.5, 0.10, 'bandpass'); this.tone(90, 0.6, 'sine', 0.08, -20); break;
     }

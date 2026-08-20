@@ -447,6 +447,25 @@ export class Game {
     this.lanterns = new LanternRenderer(this.scene);
     this._chestScanT = 0;
     this.player = new Player(this.world, this.audio);
+    // XP gains release a trail of bright motes that float up around the
+    // player — a cosmetic echo of the instant XP, so mining ore feels
+    // rewarding even before the level bar moves.
+    const xpPlayer = this.player;
+    const origXP = xpPlayer.addXP.bind(xpPlayer);
+    xpPlayer.addXP = (n) => {
+      if (n > 0 && this.particles) {
+        const m = Math.min(6, Math.max(1, Math.round(n)));
+        for (let i = 0; i < m; i++) {
+          this.particles.spawn(
+            xpPlayer.pos.x + (Math.random() - 0.5) * 1.4,
+            xpPlayer.pos.y + 0.4 + Math.random() * 1.6,
+            xpPlayer.pos.z + (Math.random() - 0.5) * 1.4,
+            (Math.random() - 0.5) * 1.1, 1.4 + Math.random(), (Math.random() - 0.5) * 1.1,
+            Math.random() < 0.7 ? 0x8ff08a : 0xd8ff8a, 0.045, 0.9, -0.25);
+        }
+      }
+      return origXP(n);
+    };
     this.itemDrops = new ItemDrops(this.scene, this.world);
     window.__EVERCRAFT_ITEM = ITEM;
 
@@ -651,6 +670,21 @@ export class Game {
     const sunC = C.sun.setRGB(1, 0.98, 0.94).lerp(C.warmSun, warm * 0.85);
     u.uSunColor.value.copy(sunC).multiplyScalar(0.92);
     u.uDaylight.value = 0.12 + dl * 0.88;
+    // lightning: the whole world strobes white for a fraction of a second
+    const lFlash = this.weather.flash || 0;
+    if (lFlash > 0.01) {
+      u.uDaylight.value = Math.min(1.15, u.uDaylight.value + lFlash * 0.95);
+      u.uSunColor.value.copy(C.sun.setRGB(1, 0.98, 0.94).lerp(C.warmSun, warm * 0.3));
+      u.uAmbient.value.setRGB(0.5, 0.52, 0.56);
+      // announce the strike as the rumble arrives (a little after the flash)
+      if (this.weather.thunderT > 0 && this.weather.thunderT < 1.1 && !this._thunderPlayed) {
+        this._thunderPlayed = true;
+        this.audio.thunder();
+      }
+      if (this.weather.thunderT <= 0) this._thunderPlayed = false;
+    } else {
+      this._thunderPlayed = false;
+    }
 
     u.uAmbient.value.copy(C.nightAmb).lerp(C.dayAmb, dl);
 
@@ -2725,13 +2759,14 @@ export class Game {
     const el = document.getElementById('perf');
     const mem = performance.memory ? ` · heap ${(performance.memory.usedJSHeapSize / 1048576).toFixed(0)}MB` : '';
     const info = this.renderer.info;
+    const day = Math.floor(this.worldTime / DAY_LENGTH) + 1;
     el.innerHTML = `
       <b>EVERCRAFT</b> ${this.fps.toFixed(0)} fps${mem}<br>
       xyz ${p.pos.x.toFixed(2)} / ${p.pos.y.toFixed(2)} / ${p.pos.z.toFixed(2)}<br>
       chunk ${Math.floor(p.pos.x / 16)}, ${Math.floor(p.pos.z / 16)} · loaded ${this.world.chunks.size}<br>
       draws ${info.render.calls} · tris ${(info.render.triangles / 1000).toFixed(1)}k<br>
       entities ${this.entities.length} · drops ${this.itemDrops.items.length}<br>
-      biome ${this.biomeName()} · light ${this.daylight().toFixed(2)}<br>
+      biome ${this.biomeName()} · light ${this.daylight().toFixed(2)} · day ${day}<br>
       vel ${p.vel.x.toFixed(1)} ${p.vel.y.toFixed(1)} ${p.vel.z.toFixed(1)} · ground ${p.onGround}
     `;
   }

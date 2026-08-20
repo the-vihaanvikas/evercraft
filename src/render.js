@@ -815,6 +815,8 @@ export class Weather {
     this.type = 'rain';
     this.intensity = 0;
     this.timer = 120 + Math.random() * 300;
+    this.flash = 0;          // lightning: 1 right after a strike, decays fast
+    this.thunderT = 0;
   }
   start(type) {
     this.active = true; this.type = type; this.points.visible = true;
@@ -832,6 +834,14 @@ export class Weather {
         this.start(cold ? 'snow' : 'rain');
         this.timer = 60 + Math.random() * 140;
       }
+    }
+    // lightning: a random strike while it rains, followed by a delayed rumble
+    this.flash *= Math.exp(-3.4 * dt);
+    this.thunderT -= dt;
+    if (this.active && this.type === 'rain' && this.intensity > 0.5 &&
+      Math.random() < dt * 0.02) {
+      this.flash = 1;
+      this.thunderT = 0.7 + Math.random() * 1.3;   // thunder arrives after the flash
     }
     const target = this.active ? 1 : 0;
     this.intensity += (target - this.intensity) * Math.min(1, dt * 0.5);
